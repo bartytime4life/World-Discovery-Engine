@@ -1,0 +1,16 @@
+# FILE: configs/detect.yaml
+# =================================================================================================
+# Detection configuration (skeleton)
+# - Choose your detector and parameters
+# =================================================================================================
+model:
+  type: baseline
+  params:
+    threshold: 0.5
+inputs:
+  dir: data/processed
+outputs:
+  dir: artifacts/candidates
+postprocess:
+  nms: false
+  min_distance_m: 100
