@@ -1,33 +1,47 @@
-# 🤝 CONTRIBUTING.md — World Discovery Engine (WDE)
+# FILE: CONTRIBUTING.md
+# -------------------------------------------------------------------------------------------------
+# Contributing to WDE
 
-**OpenAI → Z Challenge · Archaeology & Earth Systems**
+Thanks for helping build the World Discovery Engine! To keep the project healthy and reproducible:
 
----
+## 1) Ground Rules
+- Prefer small, focused PRs with tests.
+- Keep pipeline deterministic. Control all randomness (seeds) and record configs.
+- No large binaries in Git. Use DVC for data/artifacts or link to stable sources.
+- Run `pre-commit` and `pytest` locally before pushing.
 
-## 🌍 Welcome
+## 2) Dev Setup
+- Install Poetry: `pipx install poetry`
+- Install deps: `poetry install --with dev,geo,ml,viz,notebook`
+- Install hooks: `poetry run pre-commit install`
+- DVC init: `poetry run dvc init`
 
-Thank you for considering contributing to the **World Discovery Engine (WDE)**.  
-This project sits at the intersection of **AI, archaeology, and ethics**, and contributions are expected to uphold the **scientific, reproducible, and sovereignty-respecting standards** of the repository.
+## 3) Branching & Commits
+- Branch: `feature/<slug>`, `fix/<slug>`, or `docs/<slug>`.
+- Conventional commits appreciated (feat:, fix:, docs:, chore:, test:, ci:).
+- Add/Update `configs/*.yaml` when changing behavior. Document in README or docs/.
 
----
+## 4) Tests
+- `poetry run pytest`
+- Add unit tests for new modules (fast), and integration tests for pipeline steps.
+- Avoid network-dependent tests unless mocked.
 
-## 📌 Contribution Guidelines
+## 5) Data & Secrets
+- Don’t commit secrets. Use `.env` (see .env.example).
+- Datasets: document access + license in `datasets.md`.
+- For large files, use DVC remote storage (S3, GCS, SSH, etc.).
 
-We follow a **CLI-first, documentation-first, ethics-first** development model.  
-All contributions should:
+## 6) Code Style
+- Python ≥ 3.11
+- Ruff + Black + isort via pre-commit
+- Keep functions small, pure when possible; document side effects.
 
-1. **Be Reproducible** — deterministic outputs, pinned dependencies, logged configs.  
-2. **Be Documented** — every feature/update should include docs (README, code docstrings, architecture notes).  
-3. **Be Ethical** — respect **CARE** (Collective Benefit, Authority, Responsibility, Ethics) and **FAIR** principles.  
-4. **Be Testable** — unit/integration tests included for all new functionality.  
-5. **Be Useful** — improve the pipeline, scientific rigor, or community engagement.  
+## 7) PR Checklist
+- [ ] Linted (`make lint`)
+- [ ] Tests pass (`make test`)
+- [ ] Updated configs/docs as needed
+- [ ] No large binaries in Git
+- [ ] Added notes to `datasets.md` if new data sources
 
----
-
-## 🔧 How to Contribute
-
-### 1. Fork & Branch
-- Fork the repo.  
-- Create a new branch from `main`:  
-  ```bash
-  git checkout -b feature/your-feature-name
+## 8) Governance
+- See CODE_OF_CONDUCT.md. Maintainers may request rework/split of large PRs.
