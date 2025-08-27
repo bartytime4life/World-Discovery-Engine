@@ -1,0 +1,5 @@
+# FILE: .git-blame-ignore-revs
+# -------------------------------------------------------------------------------------------------
+# Add commit SHAs here that mass-reformat code (black/ruff) to keep blame useful.
+# Example:
+# 0000000000000000000000000000000000000000 Reformat with black/ruff baseline
