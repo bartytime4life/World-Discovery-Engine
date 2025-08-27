@@ -1,0 +1,61 @@
+# FILE: .gitignore
+# -------------------------------------------------------------------------------------------------
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.build/
+dist/
+build/
+.eggs/
+.ipynb_checkpoints/
+*.ipynb_convert/
+.mypy_cache/
+.pytest_cache/
+.cache/
+*.log
+*.sqlite
+*.db
+
+# Envs
+.env
+.venv/
+venv/
+.envrc
+*.env.*
+
+# Data & artifacts (use DVC for versioning large files)
+data/
+artifacts/
+!data/.gitkeep
+!artifacts/.gitkeep
+
+# DVC internals safe list (we commit .dvc/, dvc.yaml, *.dvc)
+.dvc/cache/
+.dvc/tmp/
+.dvc/config.local
+
+# Notebooks & reports
+*.nbconvert.ipynb
+site/
+reports/
+
+# GIS / raster spillover
+*.aux.xml
+*.ovr
+*.tfw
+*.prj
+*.sidecar
+*.worldfile
+
+# Secrets & tokens
+kaggle.json
+*.key
+*.pem
+
+# OS
+.DS_Store
+Thumbs.db
