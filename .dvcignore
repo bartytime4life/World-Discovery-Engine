@@ -1,0 +1,10 @@
+# FILE: .dvcignore
+# -------------------------------------------------------------------------------------------------
+# Ignore transient / local-only paths so DVC doesn't try to track them by accident.
+**/.ipynb_checkpoints/**
+**/__pycache__/**
+**/.DS_Store
+site/**
+reports/**
+artifacts/**
+logs/**
