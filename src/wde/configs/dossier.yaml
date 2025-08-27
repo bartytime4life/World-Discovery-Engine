@@ -1,0 +1,22 @@
+# FILE: configs/dossier.yaml
+# =================================================================================================
+# Dossier building configuration (skeleton)
+# - Control dossier layout, map layers, and ethics settings (coarsening, uncertainty)
+# =================================================================================================
+layout: minimal
+inputs:
+  candidates: artifacts/candidates/candidates.json
+outputs:
+  dir: artifacts/dossiers
+ethics:
+  coarsen_coordinates: true
+  coarsen_precision: 3         # decimal places to keep (approximate)
+  include_uncertainty: true
+  redact_sensitive: true
+maps:
+  basemap: "OpenStreetMap"
+  overlays:
+    - name: dem
+      enabled: false
+    - name: vegetation
+      enabled: false
