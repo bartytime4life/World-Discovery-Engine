@@ -1,0 +1,26 @@
+# FILE: CITATION.cff
+# -------------------------------------------------------------------------------------------------
+cff-version: 1.2.0
+title: "World Discovery Engine (WDE)"
+message: "If you use WDE in your research, please cite this software."
+type: software
+authors:
+  - family-names: "WDE Team"
+    given-names: "OpenAI → Z Challenge"
+abstract: "WDE is a multi-modal AI pipeline for archaeology & earth systems, producing candidate site dossiers with uncertainty and provenance."
+license: Apache-2.0
+version: "0.1.0"
+repository-code: "https://example.com/your-wde-repo"
+keywords:
+  - archaeology
+  - remote sensing
+  - LiDAR
+  - SAR
+  - ADE
+preferred-citation:
+  type: article
+  title: "World Discovery Engine: Multi-modal AI for Archaeological Discovery"
+  authors:
+    - family-names: "WDE Team"
+      given-names: "OpenAI → Z Challenge"
+  year: 2025
