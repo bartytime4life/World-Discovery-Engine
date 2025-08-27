@@ -1,0 +1,22 @@
+# FILE: configs/preprocess.yaml
+# =================================================================================================
+# Preprocess configuration (skeleton)
+# - Define steps to tile/reproject/normalize raw layers into a shared grid/CRS
+# =================================================================================================
+crs: "EPSG:3857"    # Replace with your target CRS
+pixel_size_m: 10    # Target pixel size in meters (adjust per sensor)
+steps:
+  - name: reproject
+    enabled: true
+  - name: tile
+    enabled: false
+    size: [512, 512]
+  - name: normalize
+    enabled: true
+normalize:
+  method: "zscore"  # or "minmax"
+  clip: [0.01, 0.99]
+input:
+  dir: data/raw
+output:
+  dir: data/processed
