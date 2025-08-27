@@ -1,5 +1,3 @@
-Here’s a repo-root README.md that matches the updated architecture.md.
-It is written in the same professional, Kaggle-ready, scientific + archaeological style and integrates the project files, HIA–Geodetic Codex principles, and your challenge deliverables.
 
 ⸻
 
