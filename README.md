@@ -1,6 +1,3 @@
-
-⸻
-
 🌍 World Discovery Engine (WDE)
 
 OpenAI → Z Challenge · Archaeology & Earth Systems
