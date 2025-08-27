@@ -1,0 +1,34 @@
+# FILE: configs/data.yaml
+# =================================================================================================
+# Data acquisition configuration (skeleton)
+#
+# Fill these with your actual providers and AOIs. The CLI stage `wde data fetch` will
+# read this file and use your environment variables for authentication.
+# =================================================================================================
+aoi:
+  # Example AOI polygon (GeoJSON or bbox). Replace with your study area.
+  bbox: [-70.0, -10.0, -60.0, -5.0]  # [minLon, minLat, maxLon, maxLat]
+sources:
+  - name: sentinel-2
+    enabled: false
+    products: ["L2A"]
+    notes: "Configure Sentinel Hub or OpenHub credentials in .env"
+  - name: sentinel-1
+    enabled: false
+    products: ["GRD"]
+    notes: "Requires radiometric terrain correction; set polarization and orbit"
+  - name: landsat-8-9
+    enabled: false
+    products: ["SR"]
+    notes: "Historical time series (cloud filtering needed)"
+  - name: nicfi-planet
+    enabled: false
+    products: ["monthly_mosaic"]
+    notes: "Tropics basemaps; non-commercial license"
+  - name: dem
+    enabled: true
+    products: ["SRTM", "Copernicus"]
+    notes: "DEM/DTM for hydrology / relief"
+output:
+  dir: data/raw
+  provenance: true
