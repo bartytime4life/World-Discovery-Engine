@@ -1,0 +1,34 @@
+# FILE: dvc.yaml
+# -------------------------------------------------------------------------------------------------
+stages:
+  fetch_data:
+    cmd: poetry run python -m wde.data.fetch  # implement later
+    deps:
+      - src/wde/data/fetch.py
+      - configs/data.yaml
+    outs:
+      - data/raw
+  preprocess:
+    cmd: poetry run python -m wde.data.preprocess
+    deps:
+      - src/wde/data/preprocess.py
+      - data/raw
+      - configs/preprocess.yaml
+    outs:
+      - data/processed
+  detect:
+    cmd: poetry run python -m wde.detect.run
+    deps:
+      - src/wde/detect/run.py
+      - data/processed
+      - configs/detect.yaml
+    outs:
+      - artifacts/candidates
+  dossier:
+    cmd: poetry run python -m wde.dossier.build
+    deps:
+      - src/wde/dossier/build.py
+      - artifacts/candidates
+      - configs/dossier.yaml
+    outs:
+      - artifacts/dossiers
