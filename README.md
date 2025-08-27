@@ -1,38 +1,40 @@
-🌍 World Discovery Engine (WDE)
+# 🌍 World Discovery Engine (WDE)
 
-OpenAI → Z Challenge · Archaeology & Earth Systems
+**OpenAI → Z Challenge · Archaeology & Earth Systems**
 
-⸻
+---
 
-📌 Overview
+## 📌 Overview
 
-The World Discovery Engine (WDE) is a multi-modal AI pipeline that detects archaeologically significant sites in the Amazon and beyond.
-It fuses satellite imagery, radar, LiDAR, soil/vegetation maps, hydrology, historical archives, and core sampling data to generate candidate site dossiers.
+The **World Discovery Engine (WDE)** is a **multi-modal AI pipeline** that detects **archaeologically significant sites** in the Amazon and beyond.  
+It fuses **satellite imagery, radar, LiDAR, soil/vegetation maps, hydrology, historical archives, and core sampling data** to generate **candidate site dossiers**.
 
 Each dossier includes:
-	•	📡 Multi-sensor overlays (Sentinel, Landsat, SAR, LiDAR)
-	•	🌱 Soil & vegetation fingerprints (ADE indicators)
-	•	📜 Historical & archival references (maps, diaries, site DBs)
-	•	🔗 Causal plausibility graphs
-	•	🎲 Uncertainty quantification & counterfactual tests
-	•	📑 Confidence narratives
 
-The deliverable is a single Kaggle Notebook (ade_discovery_pipeline.ipynb) that anyone can run end-to-end, fully reproducible and CC-0 licensed.
+- 📡 Multi-sensor overlays (Sentinel, Landsat, SAR, LiDAR)  
+- 🌱 Soil & vegetation fingerprints (ADE indicators)  
+- 📜 Historical & archival references (maps, diaries, site DBs)  
+- 🔗 Causal plausibility graphs  
+- 🎲 Uncertainty quantification & counterfactual tests  
+- 📑 Confidence narratives  
 
-⸻
+The deliverable is a **single Kaggle Notebook** (`ade_discovery_pipeline.ipynb`) that anyone can run end-to-end, fully reproducible and CC-0 licensed.
 
-🛠️ Key Features
-	•	Multi-source ingestion: Sentinel-1/2, Landsat, NICFI, DEM, GEDI LiDAR, SoilGrids, HydroSHEDS, MapBiomas ￼ ￼
-	•	Anomaly detection: CV filters, texture metrics, terrain relief, VLM zero-shot captions ￼
-	•	ADE fingerprinting: Seasonal NDVI peaks, floristic markers, ring ditches ￼
-	•	Evidence fusion: Multi-proof rule (≥2 modalities), Bayesian GNN uncertainty, causal PAG graphs ￼
-	•	Candidate dossiers: Site-level PDFs/Markdown reports with overlays, graphs, and confidence narratives ￼
-	•	Reproducibility: DVC data tracking, Hydra configs, MLflow logging, Docker environments ￼
-	•	Ethics: CARE principles, Indigenous sovereignty flags, legal compliance, anti-data-colonialism safeguards ￼
+---
 
-⸻
+## 🛠️ Key Features
 
-📂 Repository Structure
+- **Multi-source ingestion**: Sentinel-1/2, Landsat, NICFI, DEM, GEDI LiDAR, SoilGrids, HydroSHEDS, MapBiomas  
+- **Anomaly detection**: CV filters, texture metrics, terrain relief, VLM zero-shot captions  
+- **ADE fingerprinting**: Seasonal NDVI peaks, floristic markers, ring ditches  
+- **Evidence fusion**: Multi-proof rule (≥2 modalities), Bayesian GNN uncertainty, causal PAG graphs  
+- **Candidate dossiers**: Site-level PDFs/Markdown reports with overlays, graphs, and confidence narratives  
+- **Reproducibility**: DVC data tracking, Hydra configs, MLflow logging, Docker environments  
+- **Ethics**: CARE principles, Indigenous sovereignty flags, legal compliance, anti-data-colonialism safeguards  
+
+---
+
+## 📂 Repository Structure
 
 World-Discovery-Engine/
 ├─ notebooks/
@@ -55,20 +57,19 @@ World-Discovery-Engine/
 ├─ Dockerfile                        # Reproducible runtime
 └─ README.md                         # (this file)
 
+---
 
-⸻
+## 🚀 Quickstart
 
-🚀 Quickstart
+### Kaggle Notebook
+1. Fork or open `ade_discovery_pipeline.ipynb`.  
+2. Attach required Kaggle Datasets (Sentinel-2, Sentinel-1, DEM, SoilGrids).  
+3. Run all cells → produces:  
+   - `submission.csv` (competition submission)  
+   - `outputs/` (candidate dossiers: PNGs, JSON, GeoJSON, PDFs)  
 
-Kaggle Notebook
-	1.	Fork or open ade_discovery_pipeline.ipynb.
-	2.	Attach required Kaggle Datasets (Sentinel-2, Sentinel-1, DEM, SoilGrids).
-	3.	Run all cells → produces:
-	•	submission.csv (competition submission)
-	•	outputs/ (candidate dossiers: PNGs, JSON, GeoJSON, PDFs)
-
-Local Repo
-
+### Local Repo
+```bash
 # Clone and install
 git clone https://github.com/bartytime4life/World-Discovery-Engine.git
 cd World-Discovery-Engine
@@ -88,27 +89,27 @@ python wde.py bundle-kaggle
 ⸻
 
 🔬 Scientific & Technical Foundations
-	•	Fractal & pattern analysis — distinguishes natural irregularity vs. anthropogenic geometry ￼
-	•	Physics-informed models — terrain dynamics, vegetation stability, causal flow ￼
-	•	Simulation & validation — NASA-grade V&V, counterfactual SSIM ablations ￼ ￼
-	•	CausalOps lifecycle — Arrange → Create → Validate → Test → Publish → Operate → Monitor → Document ￼
+	•	Fractal & pattern analysis — distinguishes natural irregularity vs. anthropogenic geometry
+	•	Physics-informed models — terrain dynamics, vegetation stability, causal flow
+	•	Simulation & validation — NASA-grade V&V, counterfactual SSIM ablations
+	•	CausalOps lifecycle — Arrange → Create → Validate → Test → Publish → Operate → Monitor → Document
 
 ⸻
 
 ⚖️ Ethics & Governance
-	•	CARE Principles (Collective Benefit, Authority to Control, Responsibility, Ethics) ￼
-	•	Indigenous Data Sovereignty — detections flagged when overlapping Indigenous lands ￼
-	•	Legal Compliance — IPHAN (Brazil) and national heritage protections built into the pipeline ￼
-	•	Anti-Data Colonialism — outputs designed for expert review, not open site publication ￼
+	•	CARE Principles (Collective Benefit, Authority to Control, Responsibility, Ethics)
+	•	Indigenous Data Sovereignty — detections flagged when overlapping Indigenous lands
+	•	Legal Compliance — IPHAN (Brazil) and national heritage protections built into the pipeline
+	•	Anti-Data Colonialism — outputs designed for expert review, not open site publication
 
 ⸻
 
 ✅ Success Criteria
-	•	Archaeological impact: ADE proxies & geoglyphs surfaced.
-	•	Evidence depth: ≥2 independent modalities per site.
-	•	Clarity: Transparent overlays, interpretable causal graphs.
-	•	Reproducibility: Fully rerunnable on Kaggle & Docker.
-	•	Ethics: CARE-aligned, sovereignty-respecting.
+	•	Archaeological impact: ADE proxies & geoglyphs surfaced
+	•	Evidence depth: ≥2 independent modalities per site
+	•	Clarity: Transparent overlays, interpretable causal graphs
+	•	Reproducibility: Fully rerunnable on Kaggle & Docker
+	•	Ethics: CARE-aligned, sovereignty-respecting
 
 ⸻
 
@@ -141,4 +142,3 @@ For issues or suggestions, open a GitHub Issue or start a Discussion.
 
 ✨ The World Discovery Engine bridges AI, archaeology, and ethics — surfacing hidden histories while respecting the communities tied to them.
 
-⸻
