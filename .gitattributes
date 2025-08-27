@@ -1,0 +1,17 @@
+# FILE: .gitattributes
+# -------------------------------------------------------------------------------------------------
+# Normalize line endings
+* text=auto eol=lf
+
+# Treat notebooks as text (better diffs with nbstripout applied by pre-commit)
+*.ipynb filter=clean_ipynb
+
+# Mark binary geospatial assets to avoid diff bloat
+*.tif binary
+*.tiff binary
+*.jp2 binary
+*.laz binary
+*.las binary
+*.zip binary
+*.7z binary
+*.tar.gz binary
