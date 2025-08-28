@@ -1,0 +1,41 @@
+name: Publish Notebooks (HTML)
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "notebooks/**.ipynb"
+      - ".github/workflows/notebook_publish.yml"
+  workflow_dispatch: {}
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install nbconvert stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install nbconvert nbclient jupyterlab_pygments pygments nbformat
+
+      - name: Convert to HTML (no execute)
+        run: |
+          mkdir -p artifacts/html
+          shopt -s nullglob
+          for nb in notebooks/*.ipynb; do
+            echo "Converting: $nb"
+            jupyter nbconvert --to html --output-dir artifacts/html "$nb"
+          done
+
+      - name: Upload HTML artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebooks-html
+          path: artifacts/html
