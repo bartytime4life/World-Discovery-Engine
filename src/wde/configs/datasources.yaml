@@ -1,64 +1,102 @@
+# configs/datasources.yaml
+# ==============================================================================
+# World Discovery Engine (WDE) — Data Sources Configuration
+# ------------------------------------------------------------------------------
+# Defines Areas of Interest (AOIs) and dataset catalog entries used by pipeline.
+# AOIs provide bounding boxes for runs; catalog entries specify dataset sources.
+# ==============================================================================
+
+# ----------------------------------------------------------------------
+# Example Areas of Interest (AOIs)
+# ----------------------------------------------------------------------
 aoi_examples:
-- name: Amazonia-West
-  bounds_lonlat:
-  - -75.0
-  - -15.0
-  - -45.0
-  - -2.0
-  note: Demo AOI roughly covering western/central Amazon basin (not exact).
+  - name: Amazonia-West
+    bounds_lonlat: [-75.0, -15.0, -45.0, -2.0]
+    note: Demo AOI roughly covering western/central Amazon basin (not exact).
+
+# ----------------------------------------------------------------------
+# Dataset Catalog
+# ----------------------------------------------------------------------
 catalog:
   sentinel_2:
-    provider: Copernicus Open Access Hub / AWS Open Data
-    type: optical_multispectral
-    bands:
-    - B02
-    - B03
-    - B04
-    - B08
-    - B11
-    - B12
-    link: https://registry.opendata.aws/sentinel-2/
+    provider: "Copernicus Open Access Hub / AWS Open Data"
+    type: "optical_multispectral"
+    bands: [B02, B03, B04, B08, B11, B12]
+    link: "https://registry.opendata.aws/sentinel-2/"
+    license: "Copernicus free & open data policy"   # attribution: ESA/Copernicus:contentReference[oaicite:3]{index=3}
+
   sentinel_1:
-    provider: Copernicus / AWS Open Data
-    type: sar_radar
-    polarizations:
-    - VV
-    - VH
-    link: https://registry.opendata.aws/sentinel-1/
+    provider: "Copernicus / AWS Open Data"
+    type: "sar_radar"
+    polarizations: [VV, VH]
+    link: "https://registry.opendata.aws/sentinel-1/"
+    license: "Copernicus free & open data policy"
+
   landsat_collection_2:
-    provider: USGS / NASA / AWS
-    type: optical_multispectral
-    link: https://registry.opendata.aws/landsat-8/
+    provider: "USGS / NASA / AWS"
+    type: "optical_multispectral"
+    link: "https://registry.opendata.aws/landsat-8/"
+    license: "Public Domain (USGS/NASA)":contentReference[oaicite:4]{index=4}
+
   nicfi_planet_monthly:
-    provider: Planet / NICFI
-    type: monthly_mosaics
-    note: Requires access via NICFI program; not available on Kaggle by default.
-    link: https://www.planet.com/nicfi/
+    provider: "Planet / NICFI"
+    type: "monthly_mosaics"
+    note: "Requires NICFI program access; not available by default on Kaggle"
+    link: "https://www.planet.com/nicfi/"
+    license: "NICFI program terms (non-commercial use)":contentReference[oaicite:5]{index=5}
+
   srtm_dem:
-    provider: NASA / CGIAR
-    type: dem
-    link: https://registry.opendata.aws/srtm/
+    provider: "NASA / CGIAR"
+    type: "dem"
+    resolution: "30m"
+    link: "https://registry.opendata.aws/srtm/"
+    license: "Public Domain (NASA SRTM)":contentReference[oaicite:6]{index=6}
+
   copernicus_dem:
-    provider: Copernicus
-    type: dem
-    link: https://registry.opendata.aws/copernicus-dem/
+    provider: "Copernicus"
+    type: "dem"
+    resolution: "30m / 90m"
+    link: "https://registry.opendata.aws/copernicus-dem/"
+    license: "Copernicus free & open data policy"
+
   gedi_lidar:
-    provider: NASA GEDI
-    type: spaceborne_lidar
-    link: https://lpdaac.usgs.gov/product_search/?query=GEDI
+    provider: "NASA GEDI (LP DAAC)"
+    type: "spaceborne_lidar"
+    link: "https://lpdaac.usgs.gov/product_search/?query=GEDI"
+    license: "NASA open data (EOSDIS)":contentReference[oaicite:7]{index=7}
+
   opentopography:
-    provider: OpenTopography
-    type: lidar_point_clouds
-    link: https://opentopography.org/
+    provider: "OpenTopography"
+    type: "lidar_point_clouds"
+    link: "https://opentopography.org/"
+    license: "Varies by dataset; most open with attribution":contentReference[oaicite:8]{index=8}
+
   mapbiomas:
-    provider: MapBiomas
-    type: landcover_classification
-    link: https://mapbiomas.org/
+    provider: "MapBiomas"
+    type: "landcover_classification"
+    link: "https://mapbiomas.org/"
+    license: "MapBiomas terms (non-commercial, attribution required)":contentReference[oaicite:9]{index=9}
+
   modis:
-    provider: NASA
-    type: climate_land_products
-    link: https://lpdaac.usgs.gov/tools/data_access/
+    provider: "NASA"
+    type: "climate_land_products"
+    link: "https://lpdaac.usgs.gov/tools/data_access/"
+    license: "NASA open data (EOSDIS)":contentReference[oaicite:10]{index=10}
+
   hydrosheds:
-    provider: WWF
-    type: hydrography
-    link: https://www.hydrosheds.org/
+    provider: "WWF"
+    type: "hydrography"
+    link: "https://www.hydrosheds.org/"
+    license: "WWF HydroSHEDS free use terms":contentReference[oaicite:11]{index=11}
+
+```
+
+---
+
+### 🔑 Key points
+
+* **AOI examples** let you predefine bounding boxes (here: Amazonia-West).
+* **Catalog entries** cover the core open geospatial + environmental datasets required by WDE (Sentinel, Landsat, DEM, LiDAR, soils, vegetation, hydrology).
+* **Licenses** added to clarify usage: Copernicus (open), Landsat (public domain), NASA (EOSDIS open), Planet NICFI (non-commercial), WWF HydroSHEDS, etc.
+
+---
