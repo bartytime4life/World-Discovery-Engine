@@ -1,0 +1,87 @@
+# .github/workflows/kaggle_notebook_check.yml
+# ==============================================================================
+# WDE — Kaggle Notebook Check
+# Purpose: Validate that ade_discovery_pipeline.ipynb runs end-to-end on Kaggle
+# - Ensures reproducibility and compliance with Kaggle’s execution environment
+# - Executes with pinned Python & deps (mirroring Kaggle kernels)
+# - Verifies that outputs (candidate dossiers, GeoJSON, JSON logs) are generated
+# ==============================================================================
+
+name: Kaggle Notebook Check
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "notebooks/ade_discovery_pipeline.ipynb"
+      - "world_engine/**"
+      - "configs/**"
+  workflow_dispatch:
+
+jobs:
+  notebook-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ------------------------------------------------------------
+      # 1. Checkout repository
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------
+      # 2. Setup Python (match Kaggle kernel env: Python 3.10+)
+      # ------------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # ------------------------------------------------------------
+      # 3. Install dependencies
+      #    (match Kaggle runtime: numpy, pandas, matplotlib, torch, rasterio, etc.)
+      # ------------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nbconvert papermill jupyter nbformat
+
+      # ------------------------------------------------------------
+      # 4. Lint notebook (ensure metadata & style are clean)
+      # ------------------------------------------------------------
+      - name: Lint notebook JSON
+        run: |
+          pip install nbstripout
+          nbstripout --install
+          nbstripout --check notebooks/ade_discovery_pipeline.ipynb
+
+      # ------------------------------------------------------------
+      # 5. Execute notebook end-to-end with papermill
+      # ------------------------------------------------------------
+      - name: Run notebook with papermill
+        run: |
+          papermill notebooks/ade_discovery_pipeline.ipynb \
+                   notebooks/ade_discovery_pipeline_out.ipynb \
+                   -k python3
+
+      # ------------------------------------------------------------
+      # 6. Verify outputs (candidate dossiers, GeoJSON, JSON logs)
+      # ------------------------------------------------------------
+      - name: Verify expected outputs
+        run: |
+          test -d outputs || (echo "❌ outputs/ directory missing" && exit 1)
+          ls -lh outputs/
+          test -f outputs/candidates.json || (echo "❌ candidates.json missing" && exit 1)
+
+      # ------------------------------------------------------------
+      # 7. Upload notebook & outputs as workflow artifacts
+      # ------------------------------------------------------------
+      - name: Upload notebook run
+        uses: actions/upload-artifact@v4
+        with:
+          name: ade-discovery-pipeline-run
+          path: |
+            notebooks/ade_discovery_pipeline_out.ipynb
+            outputs/
