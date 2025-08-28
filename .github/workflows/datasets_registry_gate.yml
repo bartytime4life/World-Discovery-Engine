@@ -1,0 +1,84 @@
+name: Datasets Registry Gate
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  require-datasets-registry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (readonly)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Detect changed files
+        id: changes
+        uses: tj-actions/changed-files@v45
+        with:
+          json: true
+
+      - name: Decide if registry update is required
+        id: decide
+        run: |
+          CHANGED=$(jq -r '.all_changed_files[]?' <<< '${{ steps.changes.outputs.all_changed_files }}')
+
+          touch impacted.txt
+          echo "$CHANGED" | grep -Ei '(^|/)(world_engine/(ingest|evaluate|verify)|configs/|data/|notebooks/|docs/)' >> impacted.txt || true
+
+          # If nothing relevant changed, skip
+          if [ ! -s impacted.txt ]; then
+            echo "REQUIRE=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # If PR already labeled 'datasets' or 'no-datasets-needed', we accept
+          echo "REQUIRE=true" >> $GITHUB_OUTPUT
+
+      - name: Check datasets.md updated or label present
+        if: steps.decide.outputs.REQUIRE == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number
+            });
+
+            const hasDatasetsLabel = labels.some(l => /^(datasets|no-datasets-needed)$/i.test(l.name));
+
+            // Get changed files
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const changed = files.map(f => f.filename);
+            const updatedRegistry = changed.some(f => f.toLowerCase() === 'datasets.md');
+
+            if (hasDatasetsLabel || updatedRegistry) {
+              core.notice('✅ Datasets registry gate passed (label or datasets.md updated).');
+            } else {
+              core.setFailed(`
+❌ **Datasets registry gate**
+
+This PR touches ingestion/config/docs paths but neither:
+- updates \`datasets.md\`, **nor**
+- applies a label: \`datasets\` or \`no-datasets-needed\`.
+
+**Action options**
+1) If you introduced/modified dataset usage (sources, CRS/resolution, transforms), update \`datasets.md\`.
+2) If this change does not affect datasets (pure refactor, comments, or logic unrelated to data), add label \`no-datasets-needed\`.
+
+This rule helps keep the data registry current and reproducible.
+`);
+            }
