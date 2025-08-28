@@ -1,11 +1,25 @@
+```yaml
+# .github/workflows/release.yml
+# ==============================================================================
+# World Discovery Engine (WDE) — Ultimate Release Pipeline
+# - Reproducible bundles: submission.csv, manifest.json, outputs/, reports/
+# - Mini end-to-end pipeline (ingest → detect → evaluate → verify → report)
+# - Ethics guardrail: redact high-precision coordinates from artifacts
+# - Checksums + GitHub Release; optional Docker build & push to GHCR
+# - Caching, concurrency, and hardened defaults
+# ==============================================================================
+
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g., v1.2.0)"
-        required: true
+        description: "Release tag (e.g., v1.2.0). If omitted, uses current ref name."
+        required: false
         type: string
       build_docker:
         description: "Also build & push Docker image?"
@@ -13,29 +27,34 @@ on:
         default: "true"
         type: choice
         options: ["true", "false"]
-  push:
-    tags:
-      - "v*.*.*"
 
 permissions:
   contents: write
   packages: write
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   PYTHON_VERSION: "3.11"
   POETRY_VERSION: "1.8.3"
-  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:release-${{ github.ref_name }}
   ARTIFACT_NAME: wde-release-${{ github.ref_name }}
+  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:release-${{ github.ref_name }}
 
 jobs:
   prepare:
     name: Prepare & Build Artifacts
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -48,68 +67,71 @@ jobs:
           restore-keys: |
             pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
 
-      - name: Install dependencies
+      - name: Install dependencies (requirements.txt)
         if: hashFiles('requirements.txt') != ''
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # --- Mini end-to-end run on a tiny AOI to generate real artifacts ---
-      # Mirrors WDE Discovery Funnel: ingest → detect → evaluate → verify → report:contentReference[oaicite:4]{index=4}
-      - name: Sanity seed & env info
+      - name: Install Poetry (optional)
+        if: hashFiles('pyproject.toml') != ''
         run: |
-          python - << 'PY'
-          import os, random, numpy as np
+          pip install "poetry==${{ env.POETRY_VERSION }}"
+          poetry install --no-interaction --no-root || true
+
+      # --- Mini end-to-end (mirrors WDE Discovery Funnel) ---------------------
+      - name: Seed & runtime info
+        run: |
+          python - <<'PY'
+          import os, sys, random, numpy as np
           np.random.seed(42); random.seed(42)
-          print("Python:", os.sys.version)
+          print("Python:", sys.version)
+          print("CWD:", os.getcwd())
           PY
 
-      - name: Run miniature pipeline (ingest→report)
+      - name: Run miniature pipeline (ingest → detect → evaluate → verify → report)
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p outputs reports
-          # If a CLI entrypoint exists; else call a thin script under notebooks/ or world_engine/
           if python -c "import world_engine, sys; sys.exit(0)"; then
-            # Try unified CLI if present (per repo structure & CLI-first guidance):contentReference[oaicite:5]{index=5}
-            python -m world_engine.cli ingest  --config configs/default.yaml --aoi data/aoi/sample_bbox.geojson || true
+            # Prefer unified CLI if available; keep each stage tolerant (|| true) to allow release bundling.
+            python -m world_engine.cli ingest  --config configs/default.yaml || true
             python -m world_engine.cli detect  --config configs/default.yaml || true
             python -m world_engine.cli evaluate --config configs/default.yaml || true
             python -m world_engine.cli verify   --config configs/default.yaml || true
             python -m world_engine.cli report   --config configs/default.yaml --outdir outputs || true
           else
-            # Fallback: run notebook or a helper script that emits submission.csv + manifest.json + outputs/*
-            echo "CLI not found; running fallback mini-pipeline"
-            python - << 'PY'
-import os, json, pathlib, time
-pathlib.Path("outputs").mkdir(exist_ok=True)
-with open("submission.csv","w") as f: f.write("id,prediction\nsample,0.5\n")
-with open("manifest.json","w") as f: json.dump({"run":"mini","ts":time.time()}, f)
-with open("outputs/candidate_dossier_SAMPLE.md","w") as f: f.write("# Candidate SAMPLE\n- demo dossier\n")
-PY
+            # Fallback: generate minimal artifacts for release completeness
+            python - <<'PY'
+            import json, pathlib, time
+            pathlib.Path("outputs").mkdir(exist_ok=True)
+            pathlib.Path("reports").mkdir(exist_ok=True)
+            (pathlib.Path("submission.csv")).write_text("id,prediction\nsample,0.5\n")
+            (pathlib.Path("manifest.json")).write_text(json.dumps({"run":"mini","timestamp":time.time()}, indent=2))
+            (pathlib.Path("outputs")/"candidate_dossier_SAMPLE.md").write_text("# Candidate SAMPLE\n- demo dossier\n")
+            PY
           fi
 
-      # --- Ethics/sovereignty guardrail: ensure no precise coordinates accidentally leaked in public bundles ---
-      # Enforces governance defaults described in ethics guidance (rounding or masking by default):contentReference[oaicite:6]{index=6}
+      # --- Ethics/Sovereignty guardrail: block high-precision coordinate leakage ---
       - name: Redaction guard (coordinates)
         shell: bash
         run: |
           set -euxo pipefail
           shopt -s globstar || true
-          # Detect suspicious high-precision coordinate patterns (e.g., 6+ decimals)
-          if grep -RIEn '[+-]?[0-9]{1,3}\.[0-9]{6,}' outputs || grep -RIEn '[+-]?[0-9]{1,3}\.[0-9]{6,}' reports; then
-            echo "High-precision coordinates found; please ensure ethical redaction/rounding before releasing." >&2
+          if grep -RIEn '[+-]?[0-9]{1,3}\.[0-9]{6,}' outputs reports || true; then
+            echo "High-precision coordinates found; redact/round coordinates before releasing." >&2
             exit 1
           fi
 
-      - name: Collect release artifacts
+      - name: Collect & package release bundle
         run: |
+          set -euxo pipefail
           mkdir -p release_bundle
-          # Expected outputs per WDE spec & Kaggle packaging (submission.csv + manifest.json + outputs):contentReference[oaicite:7]{index=7}:contentReference[oaicite:8]{index=8}
           [ -f submission.csv ] && cp submission.csv release_bundle/ || true
-          [ -f manifest.json ]  && cp manifest.json  release_bundle/ || true
-          [ -d outputs ]        && cp -r outputs     release_bundle/ || true
-          [ -d reports ]        && cp -r reports     release_bundle/ || true
+          [ -f manifest.json  ] && cp manifest.json  release_bundle/ || true
+          [ -d outputs       ] && cp -r outputs     release_bundle/ || true
+          [ -d reports       ] && cp -r reports     release_bundle/ || true
           tar -czf ${{ env.ARTIFACT_NAME }}.tar.gz -C release_bundle .
 
       - name: Upload workflow artifact
@@ -118,13 +140,16 @@ PY
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.ARTIFACT_NAME }}.tar.gz
           if-no-files-found: warn
-          retention-days: 10
+          retention-days: 14
 
   docker:
     name: Build & Push Docker (optional)
     runs-on: ubuntu-latest
     needs: prepare
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_docker == 'true') }}
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_docker == 'true')
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -132,7 +157,7 @@ PY
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      - name: Set up Docker Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
@@ -142,7 +167,7 @@ PY
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
+      - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -159,7 +184,8 @@ PY
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Build args keep parity with Kaggle's Python stack where feasible:contentReference[oaicite:9]{index=9}
+          provenance: false
+          sbom: false
           build-args: |
             PYTHON_VERSION=${{ env.PYTHON_VERSION }}
 
@@ -167,6 +193,7 @@ PY
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: [prepare]
+
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -177,11 +204,20 @@ PY
         run: |
           sha256sum ${{ env.ARTIFACT_NAME }}.tar.gz | tee SHA256SUMS.txt
 
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
           draft: false
           prerelease: false
           files: |
@@ -189,3 +225,4 @@ PY
             SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
