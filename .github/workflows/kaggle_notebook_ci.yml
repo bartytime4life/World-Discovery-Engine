@@ -1,0 +1,148 @@
+# .github/workflows/kaggle_notebook_ci.yml
+# ==============================================================================
+# WDE — Kaggle Notebook CI (main branch)
+# Purpose: Heavier, challenge-grade validation of ade_discovery_pipeline.ipynb
+# - Runs on main merges or manual dispatch
+# - Executes notebook end-to-end with stricter checks:
+#   * ADE fingerprint outputs (seasonal NDVI/EVI, flora/soil proxies)
+#   * Causal plausibility (PAG .gml)
+#   * Uncertainty (Bayesian / ensemble artifacts)
+#   * SSIM what-if sensitivity
+#   * Candidate dossier files (maps/plots + JSON/GeoJSON indices)
+# - Publishes executed notebook & artifacts for audit/review
+# ==============================================================================
+
+name: Kaggle Notebook CI
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "notebooks/ade_discovery_pipeline.ipynb"
+      - "world_engine/**"
+      - "configs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-notebook-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      # ------------------------------------------------------------
+      # 1) Checkout repo
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------
+      # 2) Setup Python to mirror Kaggle kernel (3.10+)
+      #    (Notebook uses open-data + fallback demo data when offline)【Kaggle notebooks design】
+      # ------------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # ------------------------------------------------------------
+      # 3) Install dependencies (match runtime used by the notebook & pipeline)
+      #    Includes papermill for deterministic execution and common geo/ML libs.
+      # ------------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install papermill nbconvert jupyter nbformat
+          # Optional extras if present in requirements:
+          # pip install rasterio shapely opencv-python-headless torch pyro-ppl torch-geometric
+
+      # ------------------------------------------------------------
+      # 4) Execute notebook top-to-bottom with papermill
+      #    The notebook is built to run fully offline with open datasets/fallbacks【Kaggle Notebook spec】
+      # ------------------------------------------------------------
+      - name: Execute Kaggle notebook
+        run: |
+          papermill notebooks/ade_discovery_pipeline.ipynb \
+                   notebooks/ade_discovery_pipeline_out.ipynb \
+                   -k python3
+
+      # ------------------------------------------------------------
+      # 5) Validate expected artifact structure from WDE pipeline
+      #    (Repository structure + pipeline contracts)【WDE repo structure】【Architecture spec】
+      #    Required outputs (strict): 
+      #      - outputs/candidates.json
+      #      - outputs/candidates.geojson
+      #      - outputs/reports/ (candidate dossier files)
+      #      - outputs/pag/ (PAG .gml per candidate)
+      #      - outputs/uncertainty/ (histograms or json)
+      #      - outputs/ssim/ (what-if sensitivity artifacts)
+      #      - outputs/ndvi_timeseries/ (seasonal NDVI/EVI for ADE checks)
+      # ------------------------------------------------------------
+      - name: Validate artifact directories
+        run: |
+          test -d outputs || (echo "❌ outputs/ directory missing" && exit 1)
+          test -f outputs/candidates.json || (echo "❌ outputs/candidates.json missing" && exit 1)
+          test -f outputs/candidates.geojson || (echo "❌ outputs/candidates.geojson missing" && exit 1)
+          test -d outputs/reports || (echo "❌ outputs/reports/ dossier directory missing" && exit 1)
+          test -d outputs/pag || (echo "❌ outputs/pag/ (PAG graphs) missing" && exit 1)
+          test -d outputs/uncertainty || (echo "❌ outputs/uncertainty/ missing" && exit 1)
+          test -d outputs/ssim || (echo "❌ outputs/ssim/ missing" && exit 1)
+          test -d outputs/ndvi_timeseries || (echo "❌ outputs/ndvi_timeseries/ missing" && exit 1)
+
+      # ------------------------------------------------------------
+      # 6) ADE fingerprint checks (seasonal NDVI/EVI + proxies)
+      #    Notebook/pipeline describes ADE fingerprint detection & timeseries export【Notebook】【Architecture】
+      # ------------------------------------------------------------
+      - name: Check ADE fingerprint artifacts
+        run: |
+          # Require at least one candidate to have NDVI/EVI timeseries & ADE fingerprint JSON
+          ls -1 outputs/ndvi_timeseries/*.csv >/dev/null 2>&1 || (echo "❌ No NDVI/EVI CSV timeseries found" && exit 1)
+          ls -1 outputs/ade_fingerprint/*.json >/dev/null 2>&1 || (echo "❌ No ADE fingerprint JSON found" && exit 1)
+
+      # ------------------------------------------------------------
+      # 7) Causal plausibility (PAG) existence check
+      #    The architecture requires saving PAG graphs per candidate (.gml)【Architecture】
+      # ------------------------------------------------------------
+      - name: Check PAG graphs (.gml)
+        run: |
+          ls -1 outputs/pag/*.gml >/dev/null 2>&1 || (echo "❌ No PAG .gml files found" && exit 1)
+
+      # ------------------------------------------------------------
+      # 8) Uncertainty artifacts (histograms/JSON)
+      #    The pipeline requires calibrated uncertainty outputs per candidate【Architecture】
+      # ------------------------------------------------------------
+      - name: Check uncertainty exports
+        run: |
+          # Accept JSON or image histograms
+          ls -1 outputs/uncertainty/*.json >/dev/null 2>&1 || ls -1 outputs/uncertainty/*.png >/dev/null 2>&1 || (echo "❌ No uncertainty artifacts found" && exit 1)
+
+      # ------------------------------------------------------------
+      # 9) SSIM what-if sensitivity artifacts
+      #    Notebook/pipeline includes counterfactual SSIM checks【Architecture】
+      # ------------------------------------------------------------
+      - name: Check SSIM sensitivity exports
+        run: |
+          ls -1 outputs/ssim/*.json >/dev/null 2>&1 || ls -1 outputs/ssim/*.png >/dev/null 2>&1 || (echo "❌ No SSIM sensitivity artifacts found" && exit 1)
+
+      # ------------------------------------------------------------
+      # 10) Dossier files (reports per verified candidate)
+      #     Notebook/pipeline emits report artifacts in outputs/reports/【Architecture】【Repo structure】
+      # ------------------------------------------------------------
+      - name: Check candidate dossiers
+        run: |
+          # Accept PDF, HTML, or Markdown reports
+          ls -1 outputs/reports/*.{pdf,html,md} >/dev/null 2>&1 || (echo "❌ No candidate dossier files found" && exit 1)
+
+      # ------------------------------------------------------------
+      # 11) Upload executed notebook & artifacts for audit
+      # ------------------------------------------------------------
+      - name: Upload notebook & artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wde-kaggle-notebook-ci
+          path: |
+            notebooks/ade_discovery_pipeline_out.ipynb
+            outputs/
