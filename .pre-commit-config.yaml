@@ -1,17 +1,21 @@
 # FILE: .pre-commit-config.yaml
 # -------------------------------------------------------------------------------------------------
-# World Discovery Engine (WDE) — Pre-commit configuration
-# Goals:
-#  - Fast, reliable feedback for contributors
-#  - Consistent style (Black + Ruff + isort) across code & notebooks (via nbQA)
-#  - Safety checks (secrets, large files, security linting, Dockerfile/Shell lint)
-#  - Reproducibility hygiene (YAML/TOML/JSON validity, pyproject validation)
-#  - Optional pre-push gates for tests and DVC hygiene
+# 🌍 World Discovery Engine (WDE) — Pre-commit configuration (Ultimate, hardened)
 #
-# Notes:
-#  - Keep hooks fast for pre-commit; run heavier checks in CI or pre-push stage
-#  - Exclude large/generated dirs: data/, outputs/, artifacts/, .dvc/cache/, node_modules/
-#  - Default Python: 3.11 (match pyproject toolchain)
+# Philosophy
+# ----------
+# • Fast local feedback; heavy checks moved to pre-push or CI.
+# • One style everywhere (Black+Ruff+isort), enforced in .py and .ipynb via nbQA.
+# • Repro hygiene for configs & docs (YAML/TOML/JSON/MD), consistent LF EOLs.
+# • Safety rails: secrets, large binaries (use DVC), Docker/Shell lint, basic security scan.
+# • Enforce .editorconfig across the repo to avoid platform drift.
+#
+# Notes
+# -----
+# • Default Python matches pyproject (3.11).
+# • Exclude generated / heavy paths globally; prefer targeted 'files' in hooks where sensible.
+# • Use stages to keep 'pre-commit' fast; push gates add deeper checks.
+# -------------------------------------------------------------------------------------------------
 
 minimum_pre_commit_version: "3.5.0"
 
@@ -38,9 +42,9 @@ exclude: >
   )
 
 repos:
-  # -----------------------------
+  # ----------------------------------------------------------------------------------------------
   # Python formatting & linting
-  # -----------------------------
+  # ----------------------------------------------------------------------------------------------
   - repo: https://github.com/psf/black
     rev: 24.8.0
     hooks:
@@ -54,7 +58,7 @@ repos:
     hooks:
       - id: ruff
         name: ruff (py lint)
-        args: ["--fix", "--line-length=100"]
+        args: ["--fix", "--unsafe-fixes", "--line-length=100"]
       - id: ruff-format
         name: ruff-format (py)
 
@@ -65,7 +69,7 @@ repos:
         name: isort (imports)
         args: ["--profile=black", "--filter-files"]
 
-  # nbQA to apply Black/Ruff to notebooks (.ipynb)
+  # Apply Black/Ruff to notebooks (.ipynb) with nbQA
   - repo: https://github.com/nbQA-dev/nbQA
     rev: 1.9.0
     hooks:
@@ -89,9 +93,24 @@ repos:
         args: ["--drop-empty-cells"]
         files: "\\.ipynb$"
 
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
+  # .editorconfig enforcement (style consistency across the repo)
+  # ----------------------------------------------------------------------------------------------
+  - repo: https://github.com/editorconfig-checker/editorconfig-checker.python
+    rev: 3.3.0
+    hooks:
+      - id: editorconfig-checker
+        name: editorconfig-checker (EC)
+        alias: ec
+        args:
+          - "--disable-indentation=false"
+          - "--exclude"
+          - "(^artifacts/|^outputs/|^data/|\\.ipynb_checkpoints/|\\.dvc/cache/|\\.dvc/tmp/|^site/)"
+        stages: [pre-commit]
+
+  # ----------------------------------------------------------------------------------------------
   # Core hygiene & file integrity
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
@@ -110,11 +129,12 @@ repos:
         args: ["--fix=lf"]
       - id: check-merge-conflict
       - id: check-case-conflict
+      - id: check-executables-have-shebangs
       - id: check-added-large-files
-        args: ["--maxkb=5000"]  # 5 MB
+        args: ["--maxkb=5000"]  # 5 MB guardrail
       - id: forbid-new-submodules
 
-  # Validate pyproject.toml against the PEP 621 schema etc.
+  # Validate pyproject.toml (PEP 621 schema etc.)
   - repo: https://github.com/abravalheri/validate-pyproject
     rev: v0.19
     hooks:
@@ -125,7 +145,7 @@ repos:
     rev: v2.3.0
     hooks:
       - id: codespell
-        args: ["-L", "nd,teh,aks,fo,stucture,colour"]  # add project-specific false-positives as needed
+        args: ["-L", "nd,teh,aks,fo,stucture,colour"]  # project-specific false-positives
         additional_dependencies: []
 
   # Markdown formatting / linting
@@ -134,20 +154,21 @@ repos:
     hooks:
       - id: markdownlint
         name: markdownlint (docs)
-        args: ["--disable", "MD013"]  # disable long line rule (we use 100 cols in code; docs may vary)
+        args: ["--disable", "MD013"]  # long lines OK in docs
         files: "\\.(md|MD)$"
 
-  # Prettier for JSON/YAML/Markdown (stable formatting across envs)
+  # Prettier for JSON/YAML/Markdown (stable formatting + LF EOLs)
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v3.3.3
     hooks:
       - id: prettier
         name: prettier (json|yaml|md)
         types_or: [json, yaml, markdown]
+        args: ["--end-of-line=lf"]
 
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
   # Security & compliance
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
   - repo: https://github.com/PyCQA/bandit
     rev: 1.7.9
     hooks:
@@ -162,7 +183,7 @@ repos:
       - id: pip-audit
         name: pip-audit (vuln scan)
         args: ["-r", "requirements.txt"]
-        # If using Poetry only, consider switching to 'pip-audit -P' in CI with exported requirements.
+        # If using Poetry-only in CI: prefer `pip-audit -P` with exported lock.
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -170,11 +191,11 @@ repos:
       - id: detect-secrets
         name: detect-secrets (heuristics)
         args: ["--baseline", ".secrets.baseline"]
-        # Run `detect-secrets scan > .secrets.baseline` to bootstrap.
+        # Bootstrap once: `detect-secrets scan > .secrets.baseline`
 
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
   # Docker & Shell QA
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
   - repo: https://github.com/hadolint/hadolint
     rev: v2.12.0
     hooks:
@@ -189,9 +210,9 @@ repos:
         name: shellcheck (sh)
         files: "\\.(sh|bash)$"
 
-  # -----------------------------------
-  # Conventional commits (optional but recommended)
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
+  # Conventional commits (recommended)
+  # ----------------------------------------------------------------------------------------------
   - repo: https://github.com/commitizen-tools/commitizen
     rev: v3.29.0
     hooks:
@@ -200,9 +221,9 @@ repos:
         stages: [commit-msg]
         additional_dependencies: ["commitizen"]
 
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
   # Local project-specific hooks
-  # -----------------------------------
+  # ----------------------------------------------------------------------------------------------
   - repo: local
     hooks:
       # Prevent accidental commits of heavy binaries outside DVC
@@ -213,7 +234,7 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
-      # Quick sanity of YAML in configs/ (explicit, fast fail)
+      # Explicit, fast YAML sanity in configs/
       - id: check-configs
         name: check-configs (configs/*.yaml)
         entry: bash -c 'yamllint -d relaxed configs || (echo "YAML lint failed in configs/"; exit 1)'
@@ -222,7 +243,7 @@ repos:
         additional_dependencies: []
         stages: [pre-commit]
 
-      # Pre-push test gate (fast mode by default)
+      # Quick test gate on push (avoid slow parametrized suites locally)
       - id: pytest-quick
         name: pytest (quick)
         entry: bash -c 'pytest -q -k "not slow" --maxfail=1'
@@ -230,7 +251,7 @@ repos:
         pass_filenames: false
         stages: [push]
 
-      # Optional: ensure DVC status is healthy before pushing
+      # DVC workspace hygiene on push (no-op if DVC absent)
       - id: dvc-status
         name: dvc status (workspace clean)
         entry: bash -c 'command -v dvc >/dev/null 2>&1 && dvc status -q || true'
