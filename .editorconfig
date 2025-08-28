@@ -1,20 +1,111 @@
 # FILE: .editorconfig
 # -------------------------------------------------------------------------------------------------
+# 🌍 World Discovery Engine (WDE) — EditorConfig
+# Purpose:
+#   Enforce consistent coding style & whitespace across all editors/IDEs, ensuring reproducibility
+#   and readability in a multi-language, scientific AI pipeline (Python, configs, docs, CI, data notes).
+#
+#   This file harmonizes indentation, line endings, and whitespace handling for:
+#     • Source code (Python, shell, Docker, Makefiles, notebooks)
+#     • Configs (YAML, JSON, TOML, INI)
+#     • Documentation (Markdown, reST, notebooks)
+#     • Data-related artifacts (CSV/TSV, GeoJSON)
+#
+# References:
+#   - NASA/ESA reproducibility standards
+#   - MCP CLI coding practices [oai_citation:2‡Command Line Interfaces (CLI) Technical Reference (Master Coder Protocol).pdf](file-service://file-LyP5zi2HtrL3Jhs4GWYHRa)
+#   - WDE architecture specs [oai_citation:3‡World Discovery Engine (WDE) Architecture Specification.pdf](file-service://file-PiJpkFqNs2pDTFMtxexAuF)
+# -------------------------------------------------------------------------------------------------
+
 root = true
 
+# ----------------------------
+# Global Defaults
+# ----------------------------
 [*]
 charset = utf-8
 end_of_line = lf
 insert_final_newline = true
+trim_trailing_whitespace = true
 indent_style = space
+indent_size = 2
+
+# ----------------------------
+# Python (core WDE source)
+# ----------------------------
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+# ----------------------------
+# Configs (YAML/TOML/JSON/INI)
+# ----------------------------
+[*.{yaml,yml,toml,json,ini,cfg}]
+indent_size = 2
+
+# Make YAML reproducible for DVC/CI pipelines [oai_citation:4‡World Discovery Engine (WDE) Architecture Specification.pdf](file-service://file-PiJpkFqNs2pDTFMtxexAuF)
+[*.{yaml,yml}]
 indent_size = 2
 trim_trailing_whitespace = true
 
-[*.py]
-indent_size = 4
+# ----------------------------
+# Jupyter / Kaggle Notebooks
+# ----------------------------
+[*.ipynb]
+indent_size = 2
+trim_trailing_whitespace = false
+insert_final_newline = false
 
+# ----------------------------
+# Documentation
+# ----------------------------
 [*.md]
 trim_trailing_whitespace = false
+max_line_length = off
 
+[*.rst]
+indent_size = 3
+max_line_length = off
+
+# ----------------------------
+# Data / GIS Artifacts
+# ----------------------------
+[*.{csv,tsv}]
+indent_size = 2
+end_of_line = lf
+insert_final_newline = true
+
+[*.geojson]
+indent_size = 2
+insert_final_newline = true
+
+# ----------------------------
+# CI/CD & Automation
+# ----------------------------
+[.github/**/*.yml]
+indent_size = 2
+
+# ----------------------------
+# Build & Shell
+# ----------------------------
 [Makefile]
 indent_style = tab
+indent_size = 4
+
+[*.sh]
+indent_size = 2
+
+[Dockerfile]
+indent_size = 2
+
+# ----------------------------
+# Special Cases
+# ----------------------------
+# Keep Git-related files tidy
+[.gitignore]
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.env]
+insert_final_newline = true
+trim_trailing_whitespace = false
