@@ -1,15 +1,16 @@
 # FILE: Makefile
 # -------------------------------------------------------------------------------------------------
-# 🌍 World Discovery Engine (WDE) — Project Makefile (Ultimate)
+# 🌍 World Discovery Engine (WDE) — Project Makefile (Ultimate++)
 #
 # Goals:
 #  - One-command setup with Poetry + pre-commit
 #  - Deterministic, provenance-rich runs (manifest with run/config hashes + seeds)
 #  - Typer CLI pipeline: selftest → ingest → scan → evaluate → verify → report
 #  - DVC orchestration, Kaggle-friendly lock exports, optional nb execution
-#  - Ethics guardrails hook + supply-chain hygiene (lint/fmt/audit)
+#  - Ethics guardrails hook + supply-chain hygiene (lint/fmt/audit/secrets/editorconfig)
 #  - Clean packaging with optional artifact inclusion
 #  - Docker: prod vs dev profiles using .dockerignore / .dockerignore-light
+#  - Dev UX: Jupyter-in-container helpers
 #
 # Usage:
 #   make help
@@ -19,10 +20,12 @@
 #   make export-locks     # export requirements*.txt for Kaggle
 #   make kaggle-zip       # build Kaggle bundle under artifacts/
 #   make lint fmt test ci audit  # hygiene & tests
+#   make editorconfig secrets-scan  # extra hygiene
 #   make manifest         # write artifacts/metrics/run_manifest.json
 #   make package          # tarball of results & docs under artifacts/
 #   make docker-build-prod|dev   # build images (prod uses .dockerignore; dev keeps tests/docs)
 #   make docker-run-prod|dev     # run images (dev bind-mounts repo)
+#   make jupyter-dev             # launch Jupyter Lab in dev container
 # -------------------------------------------------------------------------------------------------
 
 SHELL      := /bin/bash -eo pipefail
@@ -55,6 +58,10 @@ WDE_AOI_BBOX ?= -3.5,-60.5,-3.4,-60.4
 DOCKER_IMAGE ?= wde
 DOCKER_TAG   ?= latest
 
+# Jupyter
+JUPYTER_PORT ?= 8888
+JUPYTER_ROOT ?= /app
+
 # Color helpers
 C_GREEN := \033[32m
 C_BLUE  := \033[34m
@@ -65,48 +72,46 @@ C_RST   := \033[0m
 # ---------- Phony ----------
 .PHONY: help setup setup-min fmt lint test audit ci \
         selftest ingest scan evaluate verify report run \
-        dvc-repro dvc-status data-pull \
+        dvc-repro dvc-status dvc-push dvc-pull data-pull \
         export-locks kaggle-export kaggle-run kaggle-zip \
+        editorconfig secrets-scan pre-commit-autoupdate \
         manifest ethics-check package \
         docker-build-prod docker-build-dev docker-run-prod docker-run-dev docker-clean \
-        clean clean-artifacts clean-dvc version hash
+        jupyter-dev jupyter-dev-url \
+        clean clean-artifacts clean-dvc version hash check-versions
 
 # ---------- Help ----------
 help:
 	@echo "WDE Make targets"
-	@echo "  setup           : Install deps (+dev, geo, ml, viz, notebook) & pre-commit hooks"
-	@echo "  setup-min       : Minimal deps (no extras) for CI or slim envs"
-	@echo "  fmt             : Format code (black, isort) and fix simple issues"
-	@echo "  lint            : Run pre-commit (ruff/black/isort/bandit/etc) on all files"
-	@echo "  test            : Run pytest"
-	@echo "  audit           : Supply-chain audit (pip-audit), report only"
-	@echo "  ci              : Convenience (fmt + lint + test + audit)"
-	@echo "  selftest        : CLI self-test"
-	@echo "  ingest          : Fetch & tile AOI, assemble raw overlay stack"
-	@echo "  scan            : Coarse anomaly detection"
-	@echo "  evaluate        : Mid-scale evaluation (NDVI/EVI, geomorph/hydro, overlays)"
-	@echo "  verify          : Multi-proof fusion (ADE fingerprints, PAG, Bayesian GNN)"
-	@echo "  report          : Generate candidate dossiers (then write manifest)"
-	@echo "  run             : End-to-end (selftest → ingest → scan → evaluate → verify → report + manifest)"
-	@echo "  dvc-repro       : Reproduce full DVC pipeline"
-	@echo "  dvc-status      : Show DVC status"
-	@echo "  export-locks    : Export requirements*.txt for Kaggle"
-	@echo "  kaggle-export   : (Placeholder) Render notebook(s) from templates"
-	@echo "  kaggle-run      : (Optional) Run a notebook with nbconvert (if template present)"
-	@echo "  kaggle-zip      : Build Kaggle bundle zip under artifacts/"
-	@echo "  ethics-check    : Optional ethics guardrails dry-run (no-op if not implemented)"
-	@echo "  manifest        : Write artifacts/metrics/run_manifest.json (provenance)"
-	@echo "  package         : Tarball of results & docs under artifacts/"
-	@echo "  version         : Print version metadata"
-	@echo "  hash            : Print run/config hashes"
+	@echo "  setup             : Install deps (+dev, geo, ml, viz, notebook) & pre-commit hooks"
+	@echo "  setup-min         : Minimal deps (no extras) for CI or slim envs"
+	@echo "  fmt               : Format code (black, isort)"
+	@echo "  lint              : Run pre-commit (ruff/black/isort/bandit/etc)"
+	@echo "  test              : Run pytest"
+	@echo "  audit             : pip-audit (advisory only)"
+	@echo "  editorconfig      : Enforce .editorconfig across repo"
+	@echo "  secrets-scan      : detect-secrets (uses .secrets.baseline if present)"
+	@echo "  pre-commit-autoupdate : Autoupdate hook versions locally"
+	@echo "  selftest          : CLI self-test"
+	@echo "  ingest|scan|evaluate|verify|report : Pipeline stages"
+	@echo "  run               : Full pipeline (→ manifest)"
+	@echo "  dvc-repro         : Reproduce full DVC pipeline"
+	@echo "  dvc-status        : Show DVC status"
+	@echo "  dvc-push|dvc-pull : Sync DVC remote"
+	@echo "  export-locks      : Export requirements*.txt for Kaggle"
+	@echo "  kaggle-zip        : Build Kaggle bundle zip under artifacts/"
+	@echo "  ethics-check      : Optional ethics guardrails dry-run"
+	@echo "  manifest          : Write artifacts/metrics/run_manifest.json"
+	@echo "  package           : Tarball of results & docs under artifacts/"
 	@echo "  docker-build-prod : Build lean prod image (.dockerignore)"
-	@echo "  docker-build-dev  : Build dev image (.dockerignore-light; keeps tests/docs/notebooks)"
+	@echo "  docker-build-dev  : Build dev image (.dockerignore-light)"
 	@echo "  docker-run-prod   : Shell into prod image"
 	@echo "  docker-run-dev    : Shell into dev image (bind-mount repo)"
+	@echo "  jupyter-dev       : Launch Jupyter Lab in dev container (http://localhost:$(JUPYTER_PORT))"
 	@echo "  docker-clean      : Prune dangling Docker images"
-	@echo "  clean           : Remove caches/__pycache__/logs"
-	@echo "  clean-artifacts : Remove artifacts/"
-	@echo "  clean-dvc       : Remove DVC caches/locks (careful)"
+	@echo "  version|hash      : Print version + run/config hashes"
+	@echo "  check-versions    : Print Python/Poetry/Pip/DVC versions"
+	@echo "  clean*            : Remove caches/artifacts/DVC cache"
 
 # ---------- Setup ----------
 setup:
@@ -136,7 +141,23 @@ audit:
 	@echo "$(C_BLUE)[WDE] pip-audit (advisory only)$(C_RST)"
 	$(PY) pip-audit || true
 
-ci: fmt lint test audit
+editorconfig:
+	@echo "$(C_BLUE)[WDE] editorconfig-checker$(C_RST)"
+	$(PY) editorconfig-checker || true
+
+secrets-scan:
+	@echo "$(C_BLUE)[WDE] detect-secrets scan (baseline if present)$(C_RST)"
+	@if [ -f .secrets.baseline ]; then \
+		$(PY) detect-secrets scan --baseline .secrets.baseline; \
+	else \
+		$(PY) detect-secrets scan; \
+	fi
+
+pre-commit-autoupdate:
+	@echo "$(C_BLUE)[WDE] pre-commit autoupdate (local)$(C_RST)"
+	$(PY) pre-commit autoupdate || true
+
+ci: fmt lint test audit editorconfig
 
 # ---------- CLI pipeline ----------
 selftest:
@@ -175,6 +196,14 @@ dvc-repro:
 dvc-status:
 	dvc status -c
 
+dvc-push:
+	@echo "$(C_BLUE)[WDE] DVC push$(C_RST)"
+	dvc push
+
+dvc-pull:
+	@echo "$(C_BLUE)[WDE] DVC pull$(C_RST)"
+	dvc pull
+
 # ---------- Data ----------
 data-pull:
 	@echo "$(C_YELL)[WDE] placeholder: implement data pulls in world_engine/ingest.py and document in datasets.md$(C_RST)"
@@ -192,7 +221,6 @@ export-locks:
 kaggle-export:
 	@echo "$(C_BLUE)[WDE] (Placeholder) Render/export Kaggle notebooks$(C_RST)"
 	mkdir -p $(NB_DIR)
-	@# Example if you maintain a template notebook:
 	@# $(PY) jupyter nbconvert --to notebook --execute templates/ade_discovery_pipeline.ipynb \
 	@#   --output $(NB_DIR)/ade_discovery_pipeline.ipynb
 
@@ -213,7 +241,6 @@ kaggle-zip: export-locks
 # ---------- Ethics (optional hook) ----------
 ethics-check:
 	@echo "$(C_BLUE)[WDE] Ethics guardrails dry-run (no-op if not implemented)$(C_RST)"
-	@# If you provide a checker (e.g., world_engine/ethics_guardrails.py with a CLI), call it here:
 	@# $(PY) python -m world_engine.ethics_guardrails --check artifacts/dossiers || true
 	@true
 
@@ -261,7 +288,6 @@ package:
 	  configs \
 	  world_engine \
 	  notebooks 2>/dev/null || true
-	@# Optionally append artifacts if present:
 	@if [ -d artifacts/dossiers ] || [ -d artifacts/metrics ] || [ -d artifacts/verified ]; then \
 	  echo "$(C_YELL)[WDE] Appending artifacts (dossiers/metrics/verified)$(C_RST)"; \
 	  tar -rzf $(ARTIFACTS)/wde_$(DATE)_bundle.tgz artifacts/dossiers 2>/dev/null || true; \
@@ -304,6 +330,24 @@ docker-clean:
 	@echo "$(C_BLUE)[WDE] Pruning dangling Docker images$(C_RST)"
 	docker image prune -f
 
+# ---------- Jupyter (dev image) ----------
+jupyter-dev:
+	@echo "$(C_BLUE)[WDE] Starting Jupyter Lab in dev container on http://localhost:$(JUPYTER_PORT)$(C_RST)"
+	docker run --rm -it \
+		-p $(JUPYTER_PORT):8888 \
+		-v $$(pwd):$(JUPYTER_ROOT) \
+		-w $(JUPYTER_ROOT) \
+		$(DOCKER_IMAGE):dev \
+		bash -lc "jupyter lab --ip=0.0.0.0 --no-browser \
+		          --NotebookApp.token='' --NotebookApp.password='' \
+		          --ServerApp.token=''    --ServerApp.password='' \
+		          --ServerApp.root_dir=$(JUPYTER_ROOT) \
+		          --ServerApp.allow_origin='*' \
+		          --ServerApp.disable_check_xsrf=True"
+
+jupyter-dev-url:
+	@echo "Open: http://localhost:$(JUPYTER_PORT) (token disabled)"
+
 # ---------- Metadata ----------
 version:
 	@echo "WDE_VERSION=$(WDE_VERSION)"
@@ -312,6 +356,12 @@ version:
 hash:
 	@echo "RUN_HASH=$(RUN_HASH)"
 	@echo "CONFIG_HASH=$(CONFIG_HASH)"
+
+check-versions:
+	@echo "python : $$(python --version 2>&1 || true)"
+	@echo "poetry : $$(poetry --version 2>&1 || true)"
+	@echo "pip    : $$(pip --version 2>&1 || true)"
+	@echo "dvc    : $$(dvc --version 2>&1 || true)"
 
 # ---------- Clean ----------
 clean:
