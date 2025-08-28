@@ -1,82 +1,186 @@
-name: PR Labeler & Checklist Guard
+name: PR Labeler & Checklist Guard — Ultimate
 
 on:
   pull_request_target:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch: {}
+
+# Concurrency to avoid duplicate runs on rapid updates
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write
+  checks: read
+  statuses: write
+
+env:
+  REQUIRED_CHECKLIST: >-
+    Ethics|Reproducibility|Datasets|Tests|CI Green
+  CONVENTIONAL_TITLE: '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\(\S+\))?!?:\s.+)$'
+  SMALL_DOCS_MAX_LINES: "50"
 
 jobs:
   label-and-validate:
+    name: Label & Validate PR
     runs-on: ubuntu-latest
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/recheck')
     steps:
-      - name: Get PR body
-        id: pr
-        uses: actions-ecosystem/action-get-merged-pull-request@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
-
-      - name: Fallback get PR via API (opened PRs)
-        if: steps.pr.outcome != 'success'
-        id: pr_fallback
+      - name: Extract PR context
+        id: ctx
         uses: actions/github-script@v7
         with:
           script: |
+            const prNum = (context.payload.pull_request && context.payload.pull_request.number) || (context.payload.issue && context.payload.issue.number);
+            if (!prNum) core.setFailed('No PR number found in context.');
             const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number
+              pull_number: prNum
             });
-            core.setOutput('body', pr.data.body || '');
+            core.setOutput('number', prNum.toString());
             core.setOutput('title', pr.data.title || '');
-          result-encoding: string
+            core.setOutput('body', pr.data.body || '');
+            core.setOutput('draft', pr.data.draft ? 'true' : 'false');
+            core.setOutput('user', pr.data.user.login);
+            core.setOutput('head', pr.data.head.ref);
+            core.setOutput('base', pr.data.base.ref);
+            core.setOutput('isFork', pr.data.head.repo.fork ? 'true' : 'false');
+            core.setOutput('changedFiles', pr.data.changed_files.toString());
+            core.setOutput('additions', pr.data.additions.toString());
+            core.setOutput('deletions', pr.data.deletions.toString());
 
-      - name: Select PR text
-        id: text
-        run: |
-          echo "BODY<<EOF" >> $GITHUB_OUTPUT
-          echo "${{ steps.pr.outputs.body || steps.pr_fallback.outputs.body }}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Apply labels based on content
+      - name: Fetch changed files
+        id: files
         uses: actions/github-script@v7
         with:
           script: |
-            const body = `${{ steps.text.outputs.BODY }}`.toLowerCase();
+            const perPage = 100;
+            const files = [];
+            let page = 1;
+            while (true) {
+              const { data } = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: Number('${{ steps.ctx.outputs.number }}'),
+                per_page: perPage,
+                page
+              });
+              files.push(...data);
+              if (data.length < perPage) break;
+              page += 1;
+            }
+            core.setOutput('json', JSON.stringify(files));
+            core.setOutput('filenames', files.map(f => f.filename).join('\n'));
+
+      - name: Compute labels from PR body/title/files
+        id: labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = (process.env.TITLE || '').toLowerCase();
+            const body = (process.env.BODY || '').toLowerCase();
+            const files = JSON.parse(process.env.FILES_JSON || '[]');
+
             const labels = new Set();
 
+            // Content-based labels
             if (body.includes('ethics') || body.includes('sovereignty') || body.includes('mask')) labels.add('ethics');
             if (body.includes('dataset') || body.includes('dvc') || body.includes('datasets.md')) labels.add('datasets');
             if (body.includes('reproducibility') || body.includes('seed') || body.includes('dockerfile') || body.includes('poetry')) labels.add('reproducibility');
             if (body.includes('notebook') || body.includes('kaggle')) labels.add('notebooks');
             if (body.includes('cli') || body.includes('typer') || body.includes('makefile')) labels.add('cli');
-            if (body.includes('ci') || body.includes('github actions')) labels.add('ci');
+            if (body.includes('ci') || body.includes('github actions') || body.includes('workflow')) labels.add('ci');
 
-            if (labels.size > 0) {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                labels: Array.from(labels)
-              });
-            }
+            // Title-based (Conventional Commit cues)
+            const tt = title;
+            if (tt.startsWith('feat')) labels.add('feature');
+            if (tt.startsWith('fix')) labels.add('bug');
+            if (tt.startsWith('perf')) labels.add('performance');
+            if (tt.startsWith('docs')) labels.add('docs');
+            if (tt.includes('refactor')) labels.add('refactor');
 
-      - name: Checklist guard (fail if required boxes not checked)
+            // Path-based labels
+            const addIfAny = (regex, label) => { if (files.some(f => regex.test(f.filename))) labels.add(label); };
+            addIfAny(/^\.github\/workflows\//, 'ci');
+            addIfAny(/^world_engine\/cli\.py|^world_engine\/.*\/cli\.py/, 'cli');
+            addIfAny(/^notebooks\/|\.ipynb$/, 'notebooks');
+            addIfAny(/^docs\/|\.md$/, 'docs');
+            addIfAny(/^data\/|datasets\.md$/, 'datasets');
+            addIfAny(/^world_engine\/|^configs\//, 'code');
+            addIfAny(/^tests\//, 'tests');
+            addIfAny(/^Dockerfile|^docker\/|^compose\.ya?ml$/, 'reproducibility');
+            addIfAny(/^pyproject\.toml|^poetry\.lock|^requirements.*\.txt$/, 'reproducibility');
+            addIfAny(/^\.github\/CODEOWNERS$/, 'governance');
+            addIfAny(/^\.github\/|^SECURITY\.md$/, 'security');
+
+            // Size label
+            const additions = Number(process.env.ADDITIONS || '0');
+            const deletions = Number(process.env.DELETIONS || '0');
+            const delta = additions + deletions;
+            let size = 'size/XS';
+            if (delta > 20 && delta <= 100) size = 'size/S';
+            else if (delta > 100 && delta <= 500) size = 'size/M';
+            else if (delta > 500 && delta <= 2000) size = 'size/L';
+            else if (delta > 2000) size = 'size/XL';
+            labels.add(size);
+
+            core.setOutput('labels', JSON.stringify([...labels]));
+          env:
+            TITLE: ${{ steps.ctx.outputs.title }}
+            BODY: ${{ steps.ctx.outputs.body }}
+            FILES_JSON: ${{ steps.files.outputs.json }}
+            ADDITIONS: ${{ steps.ctx.outputs.additions }}
+            DELETIONS: ${{ steps.ctx.outputs.deletions }}
+
+      - name: Apply labels
+        if: steps.labels.outputs.labels != '[]'
         uses: actions/github-script@v7
         with:
           script: |
-            const body = `${{ steps.text.outputs.BODY }}`;
-            const required = [
-              /- \[x\] Ethics/i,
-              /- \[x\] Reproducibility/i,
-              /- \[x\] Datasets/i,
-              /- \[x\] Tests/i,
-              /- \[x\] CI Green/i
-            ];
-            const missing = required.filter(rx => !rx.test(body)).map(rx => rx.toString());
+            const labels = JSON.parse('${{ steps.labels.outputs.labels }}');
+            if (labels.length) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number('${{ steps.ctx.outputs.number }}'),
+                labels
+              });
+            }
+
+      - name: Enforce Conventional Commit title
+        id: titlecheck
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const re = new RegExp(process.env.RE,'i');
+            const title = `${{ steps.ctx.outputs.title }}`;
+            const ok = re.test(title);
+            core.setOutput('ok', ok ? 'true' : 'false');
+            if (!ok) {
+              core.warning(`PR title does not match Conventional Commit: "${title}"`);
+            }
+          env:
+            RE: ${{ env.CONVENTIONAL_TITLE }}
+
+      - name: Checklist guard (fail if required boxes not checked)
+        id: checklist
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `${{ steps.ctx.outputs.body }}`;
+            const required = `${{ env.REQUIRED_CHECKLIST }}`.split('|').map(s => s.trim());
+            const checkers = required.map(name => new RegExp(`- \$begin:math:display$(x|X)\\$end:math:display$\\s*${name}`, 'i'));
+            const missing = [];
+            for (let i=0; i<required.length; i++) {
+              if (!checkers[i].test(body)) missing.push(required[i]);
+            }
+            core.setOutput('missing', JSON.stringify(missing));
             if (missing.length) {
               core.setFailed(`Missing required checklist items: ${missing.join(', ')}
 
@@ -87,3 +191,129 @@ Ensure your PR uses the provided template and check:
 - Tests (unit/integration)
 - CI Green`);
             }
+
+      - name: Sticky comment with validation results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number('${{ steps.ctx.outputs.number }}');
+            const missing = JSON.parse('${{ steps.checklist.outputs.missing || '[]' }}');
+            const titleOK = '${{ steps.titlecheck.outputs.ok }}' === 'true';
+            const additions = Number('${{ steps.ctx.outputs.additions }}');
+            const deletions = Number('${{ steps.ctx.outputs.deletions }}');
+            const filesChanged = Number('${{ steps.ctx.outputs.changedFiles }}');
+
+            const header = `### PR Validation Summary`;
+            const t = titleOK ? '✅ Title matches Conventional Commit' : '❌ Title not Conventional Commit';
+            const m = missing.length ? `❌ Missing checklist: ${missing.join(', ')}` : '✅ Checklist complete';
+            const stats = `Δ Lines: +${additions}/-${deletions} • Files: ${filesChanged}`;
+
+            const body = `${header}
+
+${t}
+${m}
+
+**Stats:** ${stats}
+
+> Re-run checks by commenting \`/recheck\`.`;
+
+            // Find prior bot comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            const bot = comments.find(c => c.user.type === 'Bot' && c.body && c.body.startsWith('### PR Validation Summary'));
+            if (bot) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: bot.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body
+              });
+            }
+
+      - name: Auto-approve trivial docs-only PRs
+        if: >
+          success() &&
+          steps.titlecheck.outputs.ok == 'true' &&
+          fromJSON(steps.labels.outputs.labels).includes('docs') &&
+          !fromJSON(steps.labels.outputs.labels).includes('code') &&
+          !fromJSON(steps.labels.outputs.labels).includes('tests') &&
+          (github.event.pull_request && github.event.pull_request.changed_files <= 5) &&
+          (github.event.pull_request && (github.event.pull_request.additions + github.event.pull_request.deletions) <= env.SMALL_DOCS_MAX_LINES)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: Number('${{ steps.ctx.outputs.number }}'),
+              event: 'APPROVE',
+              body: 'Auto-approved trivial docs-only PR (size threshold).'
+            });
+
+      - name: Request reviewers based on paths
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const files = JSON.parse('${{ steps.files.outputs.json }}');
+            const reviewers = new Set();
+            const teamReviewers = new Set();
+
+            const addIfAny = (regex, users=[], teams=[]) => {
+              if (files.some(f => regex.test(f.filename))) {
+                users.forEach(u => reviewers.add(u));
+                teams.forEach(t => teamReviewers.add(t));
+              }
+            };
+
+            // Example mapping; adjust to your org/team
+            addIfAny(/^\.github\/workflows\//, [], ['devops']);
+            addIfAny(/^world_engine\//, ['core-owner'], []);
+            addIfAny(/^notebooks\/|\.ipynb$/, ['data-science-owner'], []);
+            addIfAny(/^docs\/|\.md$/, ['docs-owner'], []);
+            addIfAny(/^tests\//, ['qa-owner'], []);
+
+            const r = [...reviewers];
+            const tr = [...teamReviewers];
+            if (r.length || tr.length) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: Number('${{ steps.ctx.outputs.number }}'),
+                  reviewers: r,
+                  team_reviewers: tr
+                });
+              } catch (e) {
+                core.warning(`Request reviewers failed: ${e.message}`);
+              }
+            }
+
+  # Optional: fast responder to /recheck comments
+  recheck:
+    name: Recheck Comment Handler
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issue_comment' && contains(github.event.comment.body, '/recheck')
+    steps:
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+            // No-op: labeling/validation handled by main job (which also runs for /recheck due to job-level if)
