@@ -1,0 +1,160 @@
+# .github/ISSUE_TEMPLATE/bug_report.yml
+name: "🐛 Bug Report"
+description: "For reproducible errors or pipeline malfunctions (ingestion, anomaly detection, reports, etc.)."
+title: "[bug] <short, imperative summary>"
+labels:
+  - bug
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🐛 Bug Report — Reproducible Malfunction
+        Please provide a **minimal, complete, and verifiable** reproduction.
+        Attach logs and exact CLI/config used. Link any related PRs or runs.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Briefly state what is broken.
+      placeholder: "Crash during ingest on NICFI tiles; anomaly_detector raises KeyError..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps (Exact)
+      description: Include **exact** CLI command(s), Hydra overrides, and environment steps.
+      placeholder: |
+        1) Environment:
+           - Python 3.12, Poetry 1.8.3
+           - CUDA 12.1, torch==2.4.0+cu121
+        2) Data:
+           - configs/datasources.yaml (commit abc123)
+        3) Command:
+           - spectramind ingest --config configs/default.yaml data.aoi=Amazonia-West
+           - spectramind diagnose dashboard --open-html=no
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      placeholder: "Ingest completes and writes tiles to data/ingest/..., diagnostics HTML renders."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened (include error messages in brief).
+      placeholder: "Process exits 1 with KeyError: 'B08'; diagnostics step skipped."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs & Trace (Required)
+      description: Paste the relevant log excerpt or attach as artifacts (mask secrets). Include traceback and versions near failure.
+      placeholder: |
+        ```text
+        [2025-08-27 13:02:11] ERROR anomaly_detector.py:218 - KeyError: 'B08'
+        hydra.version: 1.3.2 | config hash: 9e7a5f...
+        ```
+    validations:
+      required: true
+      render: bash
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit
+      description: Git commit SHA or tag; CLI `--version` output (includes config hash and timestamp).
+      placeholder: "commit abc123, spectramind v50.3.1 (hash: 9e7a5f...)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - S0 - Blocker (pipeline cannot run)
+        - S1 - Critical (major feature broken)
+        - S2 - Major (workaround exists)
+        - S3 - Minor (cosmetic/low impact)
+        - S4 - Trivial (typo/docs)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      multiple: true
+      options:
+        - Ingest / Data Sources
+        - Calibration Pipeline
+        - Models / Training
+        - Diagnostics / Dashboard
+        - CLI / CI
+        - Configs / Hydra
+        - DVC / Data Versioning
+        - Notebooks / Kaggle
+        - Security / Secrets
+        - Docs
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: OS/GPU/driver/CUDA, CPU/RAM, container image, etc.
+      placeholder: "Ubuntu 24.04, RTX 5080 (16GB), NVIDIA 575.XX, CUDA 12.1, Docker image ghcr.io/...:v50"
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact & Scope
+      description: Who/what is affected; frequency; datasets/AOIs impacted.
+      placeholder: "All Sentinel-2 runs for Amazonia-West fail; Landsat unaffected."
+    validations:
+      required: false
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workarounds Tried
+      placeholder: "Pinned torch==2.3.1; re-ran with data.clean=true; still failing."
+    validations:
+      required: false
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Attachments / Links
+      description: Link logs, artifacts, failing run IDs, PRs, or dashboards.
+      placeholder: "- CI run: …  - Artifact bundle: …"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Sanity Checks
+      options:
+        - label: I can reproduce this from a clean clone with documented steps.
+          required: true
+        - label: Logs and environment details are included and secrets are removed.
+          required: true
+        - label: I searched existing issues and confirmed no duplicate.
+          required: true
