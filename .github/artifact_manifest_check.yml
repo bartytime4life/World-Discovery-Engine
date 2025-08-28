@@ -1,0 +1,110 @@
+name: Artifact Manifest Check
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  manifest-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR HEAD (read-only)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Detect changed files
+        id: changes
+        uses: tj-actions/changed-files@v45
+        with:
+          json: true
+
+      - name: Determine if dossier or metrics artifacts changed
+        id: decide
+        run: |
+          CHANGED=$(jq -r '.all_changed_files[]?' <<< '${{ steps.changes.outputs.all_changed_files }}')
+          echo "$CHANGED" | grep -E '^artifacts/(dossiers|metrics)/' > impacted.txt || true
+          if [ -s impacted.txt ]; then echo "CHECK=true" >> $GITHUB_OUTPUT; else echo "CHECK=false" >> $GITHUB_OUTPUT; fi
+
+      - name: Validate manifest(s)
+        if: steps.decide.outputs.CHECK == 'true'
+        run: |
+          python3 - << 'PY'
+          import json, os, sys, glob
+
+          REQUIRED = {
+            "pipeline_version": str,
+            "run_hash": str,
+            "timestamp_utc": str,
+            "config_path": str,
+            "config_hash": str,
+            "seed_numpy": int,
+            "seed_random": int,
+            "seed_torch": int,
+            "aoi_bbox": list
+          }
+
+          # Look for manifests under artifacts/metrics/ or artifacts/dossiers/**/
+          candidates = []
+          candidates += glob.glob("artifacts/metrics/run_manifest.json")
+          candidates += glob.glob("artifacts/dossiers/*/manifest.json")
+
+          if not candidates:
+            print("No manifest files found alongside changed artifacts.")
+            sys.exit(1)
+
+          def validate(path):
+            with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+            missing = [k for k,t in REQUIRED.items() if k not in data or not isinstance(data[k], t)]
+            if missing:
+              raise ValueError(f"{path} missing/typed fields: {missing}")
+            # basic sanity
+            if not data["run_hash"].startswith("sha"):
+              raise ValueError(f"{path} run_hash should start with 'sha'")
+            if not data["config_hash"].startswith("sha"):
+              raise ValueError(f"{path} config_hash should start with 'sha'")
+            if len(data["aoi_bbox"]) != 4:
+              raise ValueError(f"{path} aoi_bbox must have 4 numbers")
+            return True
+
+          bad = []
+          for m in candidates:
+            try:
+              validate(m)
+              print(f"OK: {m}")
+            except Exception as e:
+              print(f"ERR: {e}")
+              bad.append(m)
+
+          if bad:
+            print("Manifest validation failed for:", bad)
+            sys.exit(1)
+          PY
+
+      - name: Comment guidance on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `❌ Artifact manifest check failed.
+
+Any PR adding/updating \`artifacts/dossiers/**\` or \`artifacts/metrics/**\` must include a manifest JSON with:
+
+- pipeline_version, run_hash, timestamp_utc
+- config_path, config_hash
+- seed_numpy, seed_random, seed_torch
+- aoi_bbox (min_lat, min_lon, max_lat, max_lon)
+
+See workflow \`.github/workflows/artifact_manifest_check.yml\` for required fields.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body
+            });
