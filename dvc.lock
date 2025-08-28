@@ -1,0 +1,150 @@
+# FILE: dvc.lock
+# -------------------------------------------------------------------------------------------------
+# 🌍 World Discovery Engine (WDE) — DVC Lock (Upgraded Scaffold)
+#
+# Purpose:
+#   This file pins the *exact* versions of dependencies, params, and outputs for reproducibility.
+#   Do commit this file to Git — it is part of the provenance log of every pipeline run.
+#
+# Notes:
+#   • DVC will regenerate this file with real hashes after each run (`dvc repro`).
+#   • Never add dvc.lock to .gitignore — it is required for reproducible science.
+#   • This scaffold shows intended graph structure; hashes below are placeholders.
+# -------------------------------------------------------------------------------------------------
+
+schema: '2.0'
+
+stages:
+
+  selftest:
+    cmd: poetry run wde selftest --config configs/default.yaml
+    deps:
+      - path: world_engine/__init__.py
+        md5: 00000000000000000000000000000000
+      - path: world_engine/cli.py
+        md5: 00000000000000000000000000000000
+      - path: world_engine/utils
+        md5: 00000000000000000000000000000000
+      - path: configs/default.yaml
+        md5: 00000000000000000000000000000000
+    outs:
+      - path: artifacts/selftest
+        md5: 00000000000000000000000000000000
+        is_dir: true
+    metrics:
+      - path: artifacts/selftest/selftest_report.json
+        md5: 00000000000000000000000000000000
+
+  ingest:
+    cmd: poetry run wde ingest --config configs/default.yaml --out data/raw
+    deps:
+      - path: world_engine/ingest.py
+        md5: 00000000000000000000000000000000
+      - path: configs/default.yaml
+        md5: 00000000000000000000000000000000
+    outs:
+      - path: data/raw
+        md5: 00000000000000000000000000000000
+        is_dir: true
+    metrics:
+      - path: artifacts/metrics/ingest_summary.json
+        md5: 00000000000000000000000000000000
+
+  scan:
+    cmd: poetry run wde scan --config configs/default.yaml --in data/raw --out artifacts/candidates
+    deps:
+      - path: world_engine/detect.py
+        md5: 00000000000000000000000000000000
+      - path: data/raw
+        md5: 00000000000000000000000000000000
+    outs:
+      - path: artifacts/candidates
+        md5: 00000000000000000000000000000000
+        is_dir: true
+        checkpoint: true
+    metrics:
+      - path: artifacts/metrics/scan_summary.json
+        md5: 00000000000000000000000000000000
+    plots:
+      - path: artifacts/plots/scan_anomaly_hist.csv
+        md5: 00000000000000000000000000000000
+
+  evaluate:
+    cmd: poetry run wde evaluate --config configs/default.yaml --in artifacts/candidates --out artifacts/evaluated
+    deps:
+      - path: world_engine/evaluate.py
+        md5: 00000000000000000000000000000000
+      - path: artifacts/candidates
+        md5: 00000000000000000000000000000000
+    outs:
+      - path: artifacts/evaluated
+        md5: 00000000000000000000000000000000
+        is_dir: true
+        checkpoint: true
+    metrics:
+      - path: artifacts/metrics/eval_summary.json
+        md5: 00000000000000000000000000000000
+    plots:
+      - path: artifacts/plots/ndvi_timeseries.csv
+        md5: 00000000000000000000000000000000
+      - path: artifacts/plots/elevation_relief.csv
+        md5: 00000000000000000000000000000000
+
+  verify:
+    cmd: poetry run wde verify --config configs/default.yaml --in artifacts/evaluated --out artifacts/verified
+    deps:
+      - path: world_engine/verify.py
+        md5: 00000000000000000000000000000000
+      - path: artifacts/evaluated
+        md5: 00000000000000000000000000000000
+    outs:
+      - path: artifacts/verified
+        md5: 00000000000000000000000000000000
+        is_dir: true
+    metrics:
+      - path: artifacts/metrics/verify_summary.json
+        md5: 00000000000000000000000000000000
+      - path: artifacts/metrics/verified_candidates.json
+        md5: 00000000000000000000000000000000
+
+  report:
+    cmd: poetry run wde report --config configs/default.yaml --in artifacts/verified --out artifacts/dossiers
+    deps:
+      - path: world_engine/report.py
+        md5: 00000000000000000000000000000000
+      - path: artifacts/verified
+        md5: 00000000000000000000000000000000
+    outs_no_cache:
+      - path: artifacts/dossiers
+    metrics:
+      - path: artifacts/metrics/report_summary.json
+        md5: 00000000000000000000000000000000
+    plots:
+      - path: artifacts/plots/dossier_sizes.csv
+        md5: 00000000000000000000000000000000
+
+  provenance:
+    cmd: poetry run python scripts/write_run_manifest.py
+    deps:
+      - path: configs/default.yaml
+        md5: 00000000000000000000000000000000
+    metrics:
+      - path: artifacts/metrics/run_manifest.json
+        md5: 00000000000000000000000000000000
+
+  package:
+    cmd: |
+      mkdir -p artifacts/bundles && \
+      tar -czf artifacts/bundles/wde_results.tgz \
+        artifacts/verified artifacts/dossiers artifacts/metrics artifacts/plots
+    deps:
+      - path: artifacts/verified
+        md5: 00000000000000000000000000000000
+      - path: artifacts/dossiers
+        md5: 00000000000000000000000000000000
+      - path: artifacts/metrics
+        md5: 00000000000000000000000000000000
+      - path: artifacts/plots
+        md5: 00000000000000000000000000000000
+    outs_no_cache:
+      - path: artifacts/bundles/wde_results.tgz
