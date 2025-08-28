@@ -1,60 +1,36 @@
 # FILE: .dockerignore
 # -------------------------------------------------------------------------------------------------
-# 🌍 World Discovery Engine (WDE) — Docker Ignore
-#
-# Purpose:
-#   Keep Docker build context clean, small, and secure:
-#   - Exclude heavy data/artifacts (managed by DVC/Kaggle, never baked into image)
-#   - Exclude secrets, local envs, caches
-#   - Exclude build outputs, logs, temp files
-#
-# Notes:
-#   - This mirrors patterns in .gitignore and .dvcignore, but is stricter to keep Docker images lean.
-#   - Only production-ready source code, configs, and small assets enter the image.
+# 🌍 World Discovery Engine (WDE) — Production Docker Ignore
+# Strips everything except core source + configs to keep images lean and secure.
 # -------------------------------------------------------------------------------------------------
 
-# -------------------------------
 # Python / Build artifacts
-# -------------------------------
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.so
 *.egg-info/
 .eggs/
-.build/
 dist/
 build/
-pip-wheel-metadata/
-.wheels/
-MANIFEST
 *.manifest
 *.spec
 
-# -------------------------------
 # Virtual environments
-# -------------------------------
-.venv/
 .venv*/
+.venv/
 venv/
 env/
 ENV/
 .env
-.envrc
 *.env.*
+.envrc
 poetry.lock
 
-# -------------------------------
-# Notebooks & Checkpoints
-# -------------------------------
+# Notebooks / Checkpoints
 *.ipynb_checkpoints/
 **/.ipynb_checkpoints/**
 *.nbconvert.ipynb
 
-# -------------------------------
-# Data & Artifacts (DVC-managed)
-# -------------------------------
+# Data & artifacts (DVC-managed, never in prod image)
 data/
 artifacts/
 outputs/
@@ -63,23 +39,15 @@ site/
 logs/
 tmp/
 cache/
-checkpoints/
 runs/
-# Allow keepers
-!data/.gitkeep
-!artifacts/.gitkeep
 
-# -------------------------------
-# DVC internals (safe to ignore)
-# -------------------------------
+# DVC internals (only metadata tracked in Git, not needed in container)
 .dvc/cache/
 .dvc/tmp/
 .dvc/config.local
 .dvc/lock
 
-# -------------------------------
-# GIS / Raster spillover
-# -------------------------------
+# GIS spillover
 *.aux.xml
 *.ovr
 *.tfw
@@ -91,9 +59,7 @@ runs/
 *.sidecar
 *.worldfile
 
-# -------------------------------
-# Secrets / Credentials
-# -------------------------------
+# Secrets
 kaggle.json
 *.key
 *.pem
@@ -101,21 +67,16 @@ kaggle.json
 *.cert
 *.p12
 
-# -------------------------------
-# Logs & Debug
-# -------------------------------
+# Logs & debug
 *.log
 *.out
 *.err
 profile_default/
 ipython_config.py
 
-# -------------------------------
-# OS / Editor cruft
-# -------------------------------
+# OS / Editor
 .DS_Store
 Thumbs.db
-ehthumbs.db
 *.swp
 *.swo
 *~
@@ -123,16 +84,8 @@ ehthumbs.db
 .vscode/
 *.code-workspace
 
-# -------------------------------
 # Docker / CI
-# -------------------------------
-.dockerignore
-.docker/
 docker-compose.override.yml
 docker-compose.local.yml
-
-# -------------------------------
-# Tests (optional for prod images)
-# -------------------------------
-tests/
-!tests/__init__.py
+.docker/
+.dockerignore
