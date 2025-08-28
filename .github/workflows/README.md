@@ -1,7 +1,3 @@
-Here’s a clean, contributor-friendly .github/workflows/README.md you can drop in:
-
-⸻
-
 🚦 GitHub Actions — Quick Guide
 
 This repo uses GitHub Actions to keep the World Discovery Engine (WDE) reproducible, tested, secure, and Kaggle-ready.
