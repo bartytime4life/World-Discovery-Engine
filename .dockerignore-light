@@ -1,0 +1,57 @@
+# FILE: .dockerignore-light
+# -------------------------------------------------------------------------------------------------
+# 🌍 World Discovery Engine (WDE) — Development Docker Ignore
+# Keeps tests, docs, notebooks for interactive dev, but strips heavy/secret stuff.
+# -------------------------------------------------------------------------------------------------
+
+# Heavy runtime outputs
+data/
+artifacts/
+outputs/
+reports/
+site/
+logs/
+tmp/
+cache/
+runs/
+
+# Secrets
+.env
+*.env.*
+.envrc
+kaggle.json
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+
+# Virtualenvs
+.venv*/
+.venv/
+venv/
+env/
+ENV/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# DVC internals (safe to ignore)
+.dvc/cache/
+.dvc/tmp/
+.dvc/config.local
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
