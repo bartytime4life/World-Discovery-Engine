@@ -1,0 +1,64 @@
+aoi_examples:
+- name: Amazonia-West
+  bounds_lonlat:
+  - -75.0
+  - -15.0
+  - -45.0
+  - -2.0
+  note: Demo AOI roughly covering western/central Amazon basin (not exact).
+catalog:
+  sentinel_2:
+    provider: Copernicus Open Access Hub / AWS Open Data
+    type: optical_multispectral
+    bands:
+    - B02
+    - B03
+    - B04
+    - B08
+    - B11
+    - B12
+    link: https://registry.opendata.aws/sentinel-2/
+  sentinel_1:
+    provider: Copernicus / AWS Open Data
+    type: sar_radar
+    polarizations:
+    - VV
+    - VH
+    link: https://registry.opendata.aws/sentinel-1/
+  landsat_collection_2:
+    provider: USGS / NASA / AWS
+    type: optical_multispectral
+    link: https://registry.opendata.aws/landsat-8/
+  nicfi_planet_monthly:
+    provider: Planet / NICFI
+    type: monthly_mosaics
+    note: Requires access via NICFI program; not available on Kaggle by default.
+    link: https://www.planet.com/nicfi/
+  srtm_dem:
+    provider: NASA / CGIAR
+    type: dem
+    link: https://registry.opendata.aws/srtm/
+  copernicus_dem:
+    provider: Copernicus
+    type: dem
+    link: https://registry.opendata.aws/copernicus-dem/
+  gedi_lidar:
+    provider: NASA GEDI
+    type: spaceborne_lidar
+    link: https://lpdaac.usgs.gov/product_search/?query=GEDI
+  opentopography:
+    provider: OpenTopography
+    type: lidar_point_clouds
+    link: https://opentopography.org/
+  mapbiomas:
+    provider: MapBiomas
+    type: landcover_classification
+    link: https://mapbiomas.org/
+  modis:
+    provider: NASA
+    type: climate_land_products
+    link: https://lpdaac.usgs.gov/tools/data_access/
+  hydrosheds:
+    provider: WWF
+    type: hydrography
+    link: https://www.hydrosheds.org/
