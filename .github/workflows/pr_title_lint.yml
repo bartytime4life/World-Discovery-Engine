@@ -1,51 +1,252 @@
-name: PR Title Lint
+name: PR Title Lint — Ultimate
 
 on:
   pull_request_target:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch: {}
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   pull-requests: write
   contents: read
+  issues: write
+
+env:
+  # Conventional Commit types we accept (edit to taste)
+  CC_TYPES: "feat|fix|docs|refactor|perf|test|ci|build|chore|revert"
+  # Optional scope allow-list (pipe-separated); leave blank to allow any scope
+  SCOPE_WHITELIST: ""
+  # Subject (after colon) length bounds
+  MIN_SUBJECT: "10"
+  MAX_SUBJECT: "72"
 
 jobs:
   lint-title:
+    name: Lint PR Title
     runs-on: ubuntu-latest
+    if: |
+      github.event_name != 'issue_comment' || contains(github.event.comment.body, '/recheck-title')
     steps:
-      - name: Validate PR title
+      - name: Extract PR title/context
+        id: ctx
         uses: actions/github-script@v7
         with:
           script: |
-            const title = context.payload.pull_request.title.trim();
+            // Determine PR number and fetch PR
+            const prNumber = (context.payload.pull_request && context.payload.pull_request.number)
+              || (context.payload.issue && context.payload.issue.number);
+            if (!prNumber) core.setFailed('No PR number found.');
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            core.setOutput('number', String(prNumber));
+            core.setOutput('title', pr.data.title || '');
+            core.setOutput('draft', pr.data.draft ? 'true' : 'false');
 
-            // Allowed types (feel free to expand)
-            const TYPES = ['feat', 'fix', 'docs', 'refactor', 'test', 'ci', 'chore', 'perf', 'build'];
-            // Pattern: type(scope?): imperative summary
-            // Examples: "feat(cli): add detect subcommand", "fix: correct DEM path"
-            const rx = new RegExp(`^(${TYPES.join('|')})(\$begin:math:text$[^)]+\\$end:math:text$)?:\\s+.+$`, 'i');
-            const okFormat = rx.test(title);
+      - name: Validate title (Conventional Commits + heuristics)
+        id: lint
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number('${{ steps.ctx.outputs.number }}');
+            const titleRaw = `${{ steps.ctx.outputs.title }}`.trim();
 
-            // Imperative mood heuristic: avoid past tense / gerund at the start of summary
-            // e.g., "add", "update", "create", NOT "added/adding/updates/updated"
-            const summary = title.replace(/^([^:]+:\s*)/, ''); // strip "type(scope): "
-            const badStarts = /\b(added|adding|updated|updates|fixed|fixing|removed|removing|changed|changing)\b/i.test(summary);
+            const TYPES = new RegExp(`^(${process.env.CC_TYPES})$`, 'i');
+            const SCOPE_WL = (process.env.SCOPE_WHITELIST || '').trim(); // e.g. "cli|docs|infra"
+            const SCOPE_RX = SCOPE_WL
+              ? new RegExp(`^(${SCOPE_WL})$`, 'i')
+              : new RegExp(`^[\\w\\-\\.\\/]+$`, 'i'); // permissive if no allowlist
 
-            if (!okFormat || badStarts) {
-              const tip = `
-❌ **PR title check failed**
+            // Match: type(optional-scope)(optional !) : space subject
+            // Examples: feat(cli): add detect subcommand
+            //           fix!: correct DEM reprojection
+            //           docs(readme): update badges
+            const ccRe = new RegExp(
+              `^(?<type>${process.env.CC_TYPES})(?:\$begin:math:text$(?<scope>[\\\\w\\\\-\\\\.\\\\/]+)\\$end:math:text$)?(?<bang>!)?:\\s(?<subject>.+)$`,
+              'i'
+            );
 
-**Title:** ${title}
+            const m = titleRaw.match(ccRe);
+            const errors = [];
+            const warnings = [];
 
-**Expected format:**
-\`type(scope?): imperative summary\`
+            if (!m) {
+              errors.push('Title must follow **Conventional Commits**: `type(scope?): subject` (optional `!` for breaking).');
+            } else {
+              const g = m.groups || {};
+              const type = (g.type || '').toLowerCase();
+              const scope = g.scope || '';
+              const bang  = g.bang || '';
+              const subject = (g.subject || '').trim();
+
+              // Validate type
+              if (!TYPES.test(type)) {
+                errors.push(`Unknown type \`${type}\`. Allowed: ${process.env.CC_TYPES.replace(/\|/g, ', ')}.`);
+              }
+
+              // Validate scope (if provided)
+              if (scope && !SCOPE_RX.test(scope)) {
+                if (SCOPE_WL) {
+                  errors.push(`Scope \`${scope}\` not in allowlist: ${SCOPE_WL.replace(/\|/g, ', ')}.`);
+                } else {
+                  warnings.push(`Scope \`${scope}\` contains uncommon characters. Allowed: [a-zA-Z0-9_.-/].`);
+                }
+              }
+
+              // Subject constraints
+              const minLen = parseInt(process.env.MIN_SUBJECT || '10', 10);
+              const maxLen = parseInt(process.env.MAX_SUBJECT || '72', 10);
+              if (subject.length < minLen) errors.push(`Subject too short (${subject.length}). Minimum ${minLen}.`);
+              if (subject.length > maxLen) errors.push(`Subject too long (${subject.length}). Maximum ${maxLen}.`);
+
+              // No trailing punctuation (., !, ?)
+              if (/[.!?]\s*$/.test(subject)) {
+                warnings.push('Subject should not end with punctuation (remove trailing ".", "!", or "?").');
+              }
+
+              // Imperative mood heuristic: discourage -ed/-ing/-s on first word
+              const firstWord = subject.split(/\s+/)[0] || '';
+              if (/\b(added|adding|adds|updated|updating|updates|fixed|fixing|removes|removed|changing|changes|renamed|renames)\b/i.test(firstWord)) {
+                warnings.push(`Use **imperative mood** for the first verb (e.g., "add", "update", "fix" not "${firstWord}").`);
+              }
+
+              // Disallow obvious noise / prefixes
+              if (/^\s*(wip|\[wip\]|\[draft\]|\[ci skip\])\b/i.test(titleRaw)) {
+                errors.push('Remove WIP/DRAFT/CI-skip prefixes from the title.');
+              }
+
+              // Allow ticket/PR refs only at end in parentheses: ... (#1234)
+              if (/#\d+/.test(subject) && !/\(#\d+\)\s*$/.test(subject)) {
+                warnings.push('Move issue/PR references to the **end** of the subject in parentheses, e.g., `... (#1234)`.');
+              }
+
+              // Provide a suggested "fixed" title if possible
+              let suggestion = titleRaw;
+              // Remove trailing punctuation
+              suggestion = suggestion.replace(/([.!?])\s*$/, '');
+              // Lower-case type and normalize spacing
+              suggestion = suggestion.replace(/^(\w+)(\([^)]+\))?(!)?:\s*/, (m, t, s, b) => `${t.toLowerCase()}${s || ''}${b || ''}: `);
+              core.setOutput('suggestion', suggestion);
+              core.setOutput('type', type);
+              core.setOutput('bang', bang ? 'true' : 'false');
+            }
+
+            core.setOutput('title', titleRaw);
+            core.setOutput('errors', JSON.stringify(errors));
+            core.setOutput('warnings', JSON.stringify(warnings));
+            core.setOutput('ok', errors.length === 0 ? 'true' : 'false');
+
+      - name: Label PR by type / breaking
+        if: steps.lint.outputs.ok == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number('${{ steps.ctx.outputs.number }}');
+            const type = `${{ steps.lint.outputs.type }}`.toLowerCase();
+            const bang = `${{ steps.lint.outputs.bang }}` === 'true';
+
+            const labels = [];
+            if (type) labels.push(`type:${type}`);
+            if (bang) labels.push('breaking-change');
+
+            if (labels.length) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  labels
+                });
+              } catch (e) {
+                core.warning(`Unable to add labels: ${e.message}`);
+              }
+            }
+
+      - name: Sticky comment (results)
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number('${{ steps.ctx.outputs.number }}');
+            const title = `${{ steps.lint.outputs.title }}`;
+            const ok = `${{ steps.lint.outputs.ok }}` === 'true';
+            const errors = JSON.parse(`${{ steps.lint.outputs.errors || '[]' }}`);
+            const warnings = JSON.parse(`${{ steps.lint.outputs.warnings || '[]' }}`);
+            const suggestion = `${{ steps.lint.outputs.suggestion }}`;
+
+            const header = `### PR Title Lint`;
+            const status = ok ? '✅ Title looks good.' : '❌ Title check failed.';
+            const errList = errors.length ? `\n**Errors**\n- ${errors.join('\n- ')}` : '';
+            const warnList = warnings.length ? `\n**Warnings**\n- ${warnings.join('\n- ')}` : '';
+            const help = `
+**Expected format:** \`type(scope?): subject\` (Conventional Commits)
 
 **Examples**
 - \`feat(cli): add detect subcommand\`
-- \`fix: correct DEM reproject bug\`
+- \`fix: correct DEM reprojection bug\`
+- \`docs(readme): document coordinate redaction policy\`
 
-**Avoid** starting the summary with past/continuous tense (e.g., "added/adding/updated/updates").
-`;
-              core.setFailed(tip);
+**Notes**
+- Use **imperative mood** (e.g., "add", "update", "fix"), avoid "added/adding/updated".
+- Keep subject length between **${process.env.MIN_SUBJECT}-${process.env.MAX_SUBJECT}** chars.
+- Avoid trailing punctuation; put issue refs at the end: \`... (#1234)\`.
+
+Re-run checks by commenting \`/recheck-title\`.`;
+
+            const suggestionBlock = suggestion && suggestion !== title
+              ? `\n**Suggested title**\n> ${suggestion}\n`
+              : '';
+
+            const body = `${header}
+
+**Title:** ${title}
+${status}${errList}${warnList}${suggestionBlock}
+${help}`;
+
+            // Upsert sticky comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            const bot = comments.find(c => c.user.type === 'Bot' && c.body && c.body.startsWith('### PR Title Lint'));
+            if (bot) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: bot.id,
+                body
+              });
             } else {
-              core.notice('✅ PR title looks good.');
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body
+              });
             }
+
+      - name: React to /recheck-title
+        if: github.event_name == 'issue_comment' && contains(github.event.comment.body, '/recheck-title')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+
+      - name: Fail if errors
+        if: steps.lint.outputs.ok != 'true'
+        run: |
+          echo "PR title lint failed."
+          exit 1
