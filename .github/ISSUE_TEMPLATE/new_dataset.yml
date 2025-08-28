@@ -1,0 +1,130 @@
+name: "🗂️ New Dataset Intake"
+description: "Propose a dataset for use in the WDE pipeline (open, reproducible, and ethically compliant)."
+title: "[dataset] <short name> — <region or AOI>"
+labels:
+  - datasets
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🗂️ New Dataset Intake — World Discovery Engine (WDE)
+        Please provide complete, **verifiable** info so we can ingest this dataset reproducibly and ethically.
+
+  - type: input
+    id: source_url
+    attributes:
+      label: Source URL / API endpoint
+      description: Link to the dataset homepage, canonical API endpoint, or registry page.
+      placeholder: "https://..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: license
+    attributes:
+      label: License & Terms
+      description: Include the license (e.g., CC-BY 4.0, Public Domain, NICFI Terms), attribution requirements, and any non-commercial restrictions.
+      placeholder: "License text/summary + link"
+    validations:
+      required: true
+
+  - type: input
+    id: citation
+    attributes:
+      label: Required Citation
+      description: Provide the required credit line (if any) and a DOI (if applicable).
+      placeholder: 'e.g., "Contains modified Copernicus Sentinel data (2025)"'
+    validations:
+      required: false
+
+  - type: input
+    id: data_type
+    attributes:
+      label: Data Type
+      description: Select or enter the data type (optical, SAR, DEM/DSM, LiDAR, soil grids, hydrology, landcover, historical text/map).
+      placeholder: "optical | sar | dem | lidar | soil | hydro | landcover | historical"
+    validations:
+      required: true
+
+  - type: textarea
+    id: coverage
+    attributes:
+      label: Spatial & Temporal Coverage
+      description: CRS/projection, ground resolution (m), AOI availability, date range, update cadence.
+      placeholder: "EPSG:4326; 10m; Amazon basin; 2019–2025; monthly"
+    validations:
+      required: true
+
+  - type: textarea
+    id: formats
+    attributes:
+      label: Formats & Access
+      description: File formats (GeoTIFF/JP2/COG/SAFE/CSV/JSON), STAC collections, APIs (ASF, Copernicus, Planet, USGS), example request.
+      placeholder: "COG GeoTIFF on AWS; STAC item example; Python snippet..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: preprocessing
+    attributes:
+      label: Required Preprocessing / Transforms
+      description: Reprojection, band math (e.g., NDVI), radiometric calibration, terrain correction, void filling, masking, etc.
+      placeholder: "gdalwarp to EPSG:32721; SNAP RTC for Sentinel-1; NDVI from B8/B4"
+    validations:
+      required: true
+
+  - type: input
+    id: dvc_path
+    attributes:
+      label: Proposed DVC Path
+      description: Where will this live under `data/`? (we’ll add pointers only—no large files in Git)
+      placeholder: "data/raw/<provider>/<dataset>/..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: ethics
+    attributes:
+      label: Ethics & Safety
+      description: Any constraints (e.g., Indigenous territories, protected sites, non-commercial limits, masking of sensitive coords).
+      placeholder: "NICFI non-commercial; mask coords in public outputs; sovereignty check required"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: compliance
+    attributes:
+      label: Compliance Checklist
+      description: Confirm these are correct.
+      options:
+        - label: License is compatible with WDE use (open/CC-0/CC-BY/non-commercial where allowed).
+          required: true
+        - label: No sensitive PII or exact protected site locations are exposed in public outputs.
+          required: true
+        - label: Indigenous sovereignty overlap will be flagged by guardrails (and handled privately first).
+          required: true
+        - label: Reproducible programmatic access is possible (documented API, STAC, or stable URL).
+          required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Minimal Repro Example
+      description: Provide code to fetch a small AOI clip or a single sample (Python preferred).
+      placeholder: |
+        ```python
+        # e.g., pystac_client / requests / rasterio snippet
+        ```
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else we should know (size, quotas, costs, rate limits, authentication)?
+      placeholder: "Planet NICFI API key; requestor-pays bucket; daily rate limits..."
+    validations:
+      required: false
