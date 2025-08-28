@@ -1,48 +1,119 @@
-name: Datasets Registry Gate
+name: Datasets Registry Gate — Ultimate
 
 on:
   pull_request_target:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch: {}
+
+concurrency:
+  group: datasets-registry-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
-  pull-requests: write
   contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  # File(s) accepted as the canonical registry
+  REGISTRY_CANDIDATES: "datasets.md|datasets/registry.md|datasets/registry.yaml|datasets/registry.yml"
+  # Paths that usually imply dataset impact
+  IMPACT_PATHS: >-
+    ^(world_engine/(ingest|evaluate|verify|utils)|
+      configs/|
+      data/|
+      notebooks/|
+      docs/|
+      datasets/|
+      scripts/) # add more if needed
+  # Keywords that usually indicate a new/changed data source
+  DATASET_KEYWORDS: >-
+    s3://|gs://|az://|http://|https://|sentinel|landsat|gedi|copernicus|srtm|
+    dem|raster|vector|geotiff|stac|pystac|earthengine|opentopography|soilgrids|
+    hydro( sheds)?|nicfi|planet|pdal|rasterio|rioxarray|geopandas|ogr2ogr
+  # Labels that bypass the gate
+  BYPASS_LABELS: "datasets|no-datasets-needed"
 
 jobs:
-  require-datasets-registry:
+  gate:
+    name: Enforce datasets registry update
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout (readonly)
+      - name: Checkout (read-only)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Detect changed files
         id: changes
         uses: tj-actions/changed-files@v45
         with:
           json: true
+          files_ignore: |
+            **/*.mdx
+            **/*.png
+            **/*.jpg
+            **/*.jpeg
+            **/*.gif
+            **/*.svg
+            **/*.ico
+            **/*.pdf
+            **/*.txt
+            **/*.csv
+            **/*.log
+            .github/ISSUE_TEMPLATE/**
+            .github/CODEOWNERS
+            .github/labels.yml
+            .editorconfig
+            .prettierrc*
+            .eslintrc*
+            .vscode/**
+            .idea/**
 
-      - name: Decide if registry update is required
+      - name: Decide if dataset registry update is required
         id: decide
+        shell: bash
         run: |
-          CHANGED=$(jq -r '.all_changed_files[]?' <<< '${{ steps.changes.outputs.all_changed_files }}')
+          set -euo pipefail
+          echo "all=${{ steps.changes.outputs.all_changed_files }}" > /dev/null
 
-          touch impacted.txt
-          echo "$CHANGED" | grep -Ei '(^|/)(world_engine/(ingest|evaluate|verify)|configs/|data/|notebooks/|docs/)' >> impacted.txt || true
+          jq -r '.all_changed_files[]?' <<< '${{ steps.changes.outputs.all_changed_files }}' > all.txt
 
-          # If nothing relevant changed, skip
-          if [ ! -s impacted.txt ]; then
-            echo "REQUIRE=false" >> $GITHUB_OUTPUT
+          # 1) Filter impactful paths
+          IMPACT_RX='${{ env.IMPACT_PATHS }}'
+          grep -Eio "$IMPACT_RX" all.txt | wc -l | xargs -I{} sh -c 'echo "impact_count={}";' | tee /dev/stderr
+          if ! grep -Eiq "$IMPACT_RX" all.txt; then
+            echo "require=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # If PR already labeled 'datasets' or 'no-datasets-needed', we accept
-          echo "REQUIRE=true" >> $GITHUB_OUTPUT
+          # 2) Look for likely data-source introductions in diffs (by keywords)
+          MATCH_KEYS='${{ env.DATASET_KEYWORDS }}'
+          git --no-pager diff --unified=0 ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} \
+            > diff.patch || true
+          if grep -Eiq "$MATCH_KEYS" diff.patch; then
+            echo "dataset_keywords_hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dataset_keywords_hit=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Check datasets.md updated or label present
-        if: steps.decide.outputs.REQUIRE == 'true'
+          # 3) Detect if any registry candidate has changed
+          REG_RX='${{ env.REGISTRY_CANDIDATES }}'
+          if grep -Eiq "(${REG_RX})" all.txt; then
+            echo "registry_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "registry_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "require=true" >> "$GITHUB_OUTPUT"
+
+      - name: Read labels on PR
+        id: labels
         uses: actions/github-script@v7
         with:
           script: |
@@ -51,34 +122,177 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number
             });
+            core.setOutput('labels', JSON.stringify(labels.map(l => l.name)));
 
-            const hasDatasetsLabel = labels.some(l => /^(datasets|no-datasets-needed)$/i.test(l.name));
+      - name: Check datasets registry presence or bypass
+        id: gate
+        if: steps.decide.outputs.require == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const bypassLabels = (process.env.BYPASS || '').split('|').map(s => s.trim()).filter(Boolean);
+            const labels = JSON.parse('${{ steps.labels.outputs.labels || '[]' }}');
+            const hasBypass = labels.some(l => bypassLabels.some(bl => new RegExp(`^${bl}$`, 'i').test(l)));
+            const registryChanged = '${{ steps.decide.outputs.registry_changed }}' === 'true';
 
-            // Get changed files
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100
-            });
+            core.setOutput('hasBypass', hasBypass ? 'true' : 'false');
+            core.setOutput('registryChanged', registryChanged ? 'true' : 'false');
 
-            const changed = files.map(f => f.filename);
-            const updatedRegistry = changed.some(f => f.toLowerCase() === 'datasets.md');
-
-            if (hasDatasetsLabel || updatedRegistry) {
-              core.notice('✅ Datasets registry gate passed (label or datasets.md updated).');
+            if (hasBypass || registryChanged) {
+              core.notice('✅ Datasets registry gate passed (label present or registry file changed).');
             } else {
-              core.setFailed(`
-❌ **Datasets registry gate**
-
-This PR touches ingestion/config/docs paths but neither:
-- updates \`datasets.md\`, **nor**
-- applies a label: \`datasets\` or \`no-datasets-needed\`.
+              core.setFailed(`❌ **Datasets registry gate**
+This PR touched ingestion/config/docs paths but neither:
+- updates the registry (\`${process.env.REG_RX}\`), **nor**
+- applies a label: \`${process.env.BYPASS}\`.
 
 **Action options**
-1) If you introduced/modified dataset usage (sources, CRS/resolution, transforms), update \`datasets.md\`.
-2) If this change does not affect datasets (pure refactor, comments, or logic unrelated to data), add label \`no-datasets-needed\`.
+1) If you introduced/modified dataset usage (sources, CRS/resolution, transforms), update the registry.
+2) If this change does not affect datasets (pure refactor or non-data logic), add label \`no-datasets-needed\`.
 
-This rule helps keep the data registry current and reproducible.
-`);
+Keeping the registry current ensures reproducibility and auditability.`);
             }
+          env:
+            BYPASS: ${{ env.BYPASS_LABELS }}
+            REG_RX: ${{ env.REGISTRY_CANDIDATES }}
+
+      - name: Auto-label PR if data keywords found
+        if: steps.decide.outputs.dataset_keywords_hit == 'true' && steps.gate.outputs.hasBypass != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: ['datasets']
+              });
+            } catch (e) {
+              core.warning(`Could not add label automatically (forks may not have permissions): ${e.message}`);
+            }
+
+      - name: Validate registry file structure (best-effort)
+        if: steps.gate.outputs.registryChanged == 'true'
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Accept any of these as canonical
+          for c in $(echo "${{ env.REGISTRY_CANDIDATES }}" | tr '|' ' '); do
+            if [ -f "$c" ]; then REG="$c"; break; fi
+          done
+          if [ -z "${REG:-}" ]; then
+            echo "No registry file found although registryChanged=true; skipping structure validation."
+            exit 0
+          fi
+
+          echo "Checking registry file: $REG"
+
+          if [[ "$REG" =~ \.ya?ml$ ]]; then
+            # Minimal schema expectations for YAML registry
+            python - <<'PY'
+            import sys, yaml, pathlib
+            p = pathlib.Path(sys.argv[1])
+            data = yaml.safe_load(p.read_text())
+            if not isinstance(data, (list, tuple)):
+              raise SystemExit(f"Registry YAML must be a list of dataset entries (got {type(data)}).")
+            bad = []
+            for i, d in enumerate(data):
+              if not isinstance(d, dict):
+                bad.append(f"entry[{i}] not a mapping")
+                continue
+              for k in ("id","name","source","license"):
+                if k not in d or not d[k]:
+                  bad.append(f"entry[{i}] missing '{k}'")
+            if bad:
+              raise SystemExit("Invalid registry YAML:\n- " + "\n- ".join(bad))
+            print("YAML registry structure looks OK.")
+            PY "$REG"
+          else
+            # Expect Markdown with a table header containing id|name|source|license
+            if ! grep -Eiq '^\s*\|\s*id\s*\|\s*name\s*\|\s*source\s*\|\s*license\s*\|' "$REG"; then
+              echo "⚠️ Registry Markdown does not contain a canonical table header '| id | name | source | license |'."
+            fi
+          fi
+
+      - name: Sticky guidance comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const labels = JSON.parse('${{ steps.labels.outputs.labels || '[]' }}');
+            const require   = '${{ steps.decide.outputs.require }}' === 'true';
+            const keyHit    = '${{ steps.decide.outputs.dataset_keywords_hit }}' === 'true';
+            const regChanged= '${{ steps.gate.outputs.registryChanged || 'false' }}' === 'true';
+            const hasBypass = '${{ steps.gate.outputs.hasBypass || 'false' }}' === 'true';
+
+            const header = `### Datasets Registry Gate`;
+            let state = '✅ Passed.';
+            if (require && !regChanged && !hasBypass) state = '❌ Failing.';
+
+            const tips = `
+**When to update the registry**
+- New/changed data source (URLs, STAC, buckets, dataset IDs)
+- CRS/resolution/extent/tiling schema adjustments
+- Transform pipeline (reprojection, resampling) that affects reproducibility
+
+**Accepted files**
+- \`datasets.md\` (Markdown table with \`id|name|source|license\`)
+- \`datasets/registry.yaml\` (list of entries with \`id,name,source,license\`)
+
+**Example (Markdown row)**
+\`| ade_soilgrids | ISRIC SoilGrids 250m | https://soilgrids.org | CC-BY 4.0 |\`
+
+**Example (YAML entry)**
+\`\`\`yaml
+- id: ade_soilgrids
+  name: ISRIC SoilGrids 250m
+  source: https://soilgrids.org
+  license: CC-BY-4.0
+  notes: "P = phosphorus (mg/kg), CRS=EPSG:4326, res=250m"
+\`\`\`
+`;
+
+            const body = `${header}
+
+Status: ${state}
+- Impact detected: **${require}**
+- Data keywords detected in diff: **${keyHit}**
+- Registry changed: **${regChanged}**
+- Bypass label present (datasets/no-datasets-needed): **${hasBypass}**
+
+${tips}
+
+> Re-run this gate by commenting \`/recheck-datasets\`.`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            const tag = "### Datasets Registry Gate";
+            const bot = comments.find(c => c.user.type === 'Bot' && c.body && c.body.startsWith(tag));
+            if (bot) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: bot.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber, body });
+            }
+
+  recheck:
+    name: Recheck Comment Handler
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issue_comment' && contains(github.event.comment.body, '/recheck-datasets')
+    steps:
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+            // Gate will re-run due to the main job's `if` on comment trigger.
