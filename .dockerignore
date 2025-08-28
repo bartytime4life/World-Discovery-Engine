@@ -1,18 +1,138 @@
 # FILE: .dockerignore
 # -------------------------------------------------------------------------------------------------
-**/__pycache__/**
-**/.ipynb_checkpoints/**
-**/.mypy_cache/**
-**/.pytest_cache/**
-**/.ruff_cache/**
-**/.venv/**
-.venv/
-.venv*/
-.env
-*.env.*
-data/
-artifacts/
-site/
-reports/
+# 🌍 World Discovery Engine (WDE) — Docker Ignore
+#
+# Purpose:
+#   Keep Docker build context clean, small, and secure:
+#   - Exclude heavy data/artifacts (managed by DVC/Kaggle, never baked into image)
+#   - Exclude secrets, local envs, caches
+#   - Exclude build outputs, logs, temp files
+#
+# Notes:
+#   - This mirrors patterns in .gitignore and .dvcignore, but is stricter to keep Docker images lean.
+#   - Only production-ready source code, configs, and small assets enter the image.
+# -------------------------------------------------------------------------------------------------
+
+# -------------------------------
+# Python / Build artifacts
+# -------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.build/
 dist/
 build/
+pip-wheel-metadata/
+.wheels/
+MANIFEST
+*.manifest
+*.spec
+
+# -------------------------------
+# Virtual environments
+# -------------------------------
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+.env
+.envrc
+*.env.*
+poetry.lock
+
+# -------------------------------
+# Notebooks & Checkpoints
+# -------------------------------
+*.ipynb_checkpoints/
+**/.ipynb_checkpoints/**
+*.nbconvert.ipynb
+
+# -------------------------------
+# Data & Artifacts (DVC-managed)
+# -------------------------------
+data/
+artifacts/
+outputs/
+reports/
+site/
+logs/
+tmp/
+cache/
+checkpoints/
+runs/
+# Allow keepers
+!data/.gitkeep
+!artifacts/.gitkeep
+
+# -------------------------------
+# DVC internals (safe to ignore)
+# -------------------------------
+.dvc/cache/
+.dvc/tmp/
+.dvc/config.local
+.dvc/lock
+
+# -------------------------------
+# GIS / Raster spillover
+# -------------------------------
+*.aux.xml
+*.ovr
+*.tfw
+*.prj
+*.cpg
+*.shx
+*.shp.*
+*.dbf
+*.sidecar
+*.worldfile
+
+# -------------------------------
+# Secrets / Credentials
+# -------------------------------
+kaggle.json
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+
+# -------------------------------
+# Logs & Debug
+# -------------------------------
+*.log
+*.out
+*.err
+profile_default/
+ipython_config.py
+
+# -------------------------------
+# OS / Editor cruft
+# -------------------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# -------------------------------
+# Docker / CI
+# -------------------------------
+.dockerignore
+.docker/
+docker-compose.override.yml
+docker-compose.local.yml
+
+# -------------------------------
+# Tests (optional for prod images)
+# -------------------------------
+tests/
+!tests/__init__.py
