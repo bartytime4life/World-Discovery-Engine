@@ -7,7 +7,7 @@ on:
     types: [created]
   workflow_dispatch: {}
 
-# Concurrency to avoid duplicate runs on rapid updates
+# Avoid duplicate runs on quick successive updates
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: false
@@ -20,15 +20,24 @@ permissions:
   statuses: write
 
 env:
+  # Required checklist items (case-insensitive, exact names)
   REQUIRED_CHECKLIST: >-
     Ethics|Reproducibility|Datasets|Tests|CI Green
-  CONVENTIONAL_TITLE: '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\(\S+\))?!?:\s.+)$'
+  # Conventional Commits title regex
+  CONVENTIONAL_TITLE: '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([\w\-.\/]+\))?!?:\s.+)$'
+  # Docs-only auto-approve threshold (total changed lines)
   SMALL_DOCS_MAX_LINES: "50"
+  # Size label thresholds
+  SIZE_S: "20"
+  SIZE_M: "100"
+  SIZE_L: "500"
+  SIZE_XL: "2000"
 
 jobs:
   label-and-validate:
     name: Label & Validate PR
     runs-on: ubuntu-latest
+    # Allow re-run via comment "/recheck"
     if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/recheck')
     steps:
       - name: Extract PR context
@@ -37,43 +46,38 @@ jobs:
         with:
           script: |
             const prNum = (context.payload.pull_request && context.payload.pull_request.number) || (context.payload.issue && context.payload.issue.number);
-            if (!prNum) core.setFailed('No PR number found in context.');
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNum
-            });
-            core.setOutput('number', prNum.toString());
+            if (!prNum) core.setFailed('No PR number found.');
+            const pr = await github.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: prNum });
+            core.setOutput('number', String(prNum));
             core.setOutput('title', pr.data.title || '');
-            core.setOutput('body', pr.data.body || '');
+            core.setOutput('body',  pr.data.body  || '');
             core.setOutput('draft', pr.data.draft ? 'true' : 'false');
             core.setOutput('user', pr.data.user.login);
             core.setOutput('head', pr.data.head.ref);
             core.setOutput('base', pr.data.base.ref);
             core.setOutput('isFork', pr.data.head.repo.fork ? 'true' : 'false');
-            core.setOutput('changedFiles', pr.data.changed_files.toString());
-            core.setOutput('additions', pr.data.additions.toString());
-            core.setOutput('deletions', pr.data.deletions.toString());
+            core.setOutput('changedFiles', String(pr.data.changed_files || 0));
+            core.setOutput('additions',    String(pr.data.additions || 0));
+            core.setOutput('deletions',    String(pr.data.deletions || 0));
 
       - name: Fetch changed files
         id: files
         uses: actions/github-script@v7
         with:
           script: |
+            const prNumber = Number('${{ steps.ctx.outputs.number }}');
             const perPage = 100;
             const files = [];
-            let page = 1;
-            while (true) {
+            for (let page = 1; ; page++) {
               const { data } = await github.rest.pulls.listFiles({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: Number('${{ steps.ctx.outputs.number }}'),
+                pull_number: prNumber,
                 per_page: perPage,
                 page
               });
               files.push(...data);
               if (data.length < perPage) break;
-              page += 1;
             }
             core.setOutput('json', JSON.stringify(files));
             core.setOutput('filenames', files.map(f => f.filename).join('\n'));
@@ -83,27 +87,26 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const title = (process.env.TITLE || '').toLowerCase();
-            const body = (process.env.BODY || '').toLowerCase();
-            const files = JSON.parse(process.env.FILES_JSON || '[]');
+            const title = (`${{ steps.ctx.outputs.title }}` || '').toLowerCase();
+            const body  = (`${{ steps.ctx.outputs.body }}`  || '').toLowerCase();
+            const files = JSON.parse(`${{ steps.files.outputs.json || '[]' }}`);
 
             const labels = new Set();
 
             // Content-based labels
-            if (body.includes('ethics') || body.includes('sovereignty') || body.includes('mask')) labels.add('ethics');
-            if (body.includes('dataset') || body.includes('dvc') || body.includes('datasets.md')) labels.add('datasets');
-            if (body.includes('reproducibility') || body.includes('seed') || body.includes('dockerfile') || body.includes('poetry')) labels.add('reproducibility');
-            if (body.includes('notebook') || body.includes('kaggle')) labels.add('notebooks');
-            if (body.includes('cli') || body.includes('typer') || body.includes('makefile')) labels.add('cli');
-            if (body.includes('ci') || body.includes('github actions') || body.includes('workflow')) labels.add('ci');
+            if (/(\bethics\b|\bsovereignty\b|\bmask(ing|ed)?\b)/.test(body)) labels.add('ethics');
+            if (/\bdataset(s)?\b|\bdvc\b|\bdatasets\.md\b/.test(body)) labels.add('datasets');
+            if (/\breproducibility\b|\bseed(s)?\b|\bdockerfile\b|\bpoetry\b/.test(body)) labels.add('reproducibility');
+            if (/\bnotebook(s)?\b|\bkaggle\b/.test(body)) labels.add('notebooks');
+            if (/\bcli\b|\btyper\b|\bmakefile\b/.test(body)) labels.add('cli');
+            if (/\bci\b|\bgithub actions?\b|\bworkflow(s)?\b/.test(body)) labels.add('ci');
 
             // Title-based (Conventional Commit cues)
-            const tt = title;
-            if (tt.startsWith('feat')) labels.add('feature');
-            if (tt.startsWith('fix')) labels.add('bug');
-            if (tt.startsWith('perf')) labels.add('performance');
-            if (tt.startsWith('docs')) labels.add('docs');
-            if (tt.includes('refactor')) labels.add('refactor');
+            if (title.startsWith('feat')) labels.add('feature');
+            if (title.startsWith('fix'))  labels.add('bug');
+            if (title.startsWith('perf')) labels.add('performance');
+            if (title.startsWith('docs')) labels.add('docs');
+            if (title.includes('refactor')) labels.add('refactor');
 
             // Path-based labels
             const addIfAny = (regex, label) => { if (files.some(f => regex.test(f.filename))) labels.add(label); };
@@ -120,35 +123,33 @@ jobs:
             addIfAny(/^\.github\/|^SECURITY\.md$/, 'security');
 
             // Size label
-            const additions = Number(process.env.ADDITIONS || '0');
-            const deletions = Number(process.env.DELETIONS || '0');
+            const additions = Number(`${{ steps.ctx.outputs.additions }}` || 0);
+            const deletions = Number(`${{ steps.ctx.outputs.deletions }}` || 0);
             const delta = additions + deletions;
+            const S = Number(process.env.SIZE_S || 20);
+            const M = Number(process.env.SIZE_M || 100);
+            const L = Number(process.env.SIZE_L || 500);
+            const XL= Number(process.env.SIZE_XL|| 2000);
             let size = 'size/XS';
-            if (delta > 20 && delta <= 100) size = 'size/S';
-            else if (delta > 100 && delta <= 500) size = 'size/M';
-            else if (delta > 500 && delta <= 2000) size = 'size/L';
-            else if (delta > 2000) size = 'size/XL';
+            if (delta > S && delta <= M) size = 'size/S';
+            else if (delta > M && delta <= L) size = 'size/M';
+            else if (delta > L && delta <= XL) size = 'size/L';
+            else if (delta > XL) size = 'size/XL';
             labels.add(size);
 
             core.setOutput('labels', JSON.stringify([...labels]));
-          env:
-            TITLE: ${{ steps.ctx.outputs.title }}
-            BODY: ${{ steps.ctx.outputs.body }}
-            FILES_JSON: ${{ steps.files.outputs.json }}
-            ADDITIONS: ${{ steps.ctx.outputs.additions }}
-            DELETIONS: ${{ steps.ctx.outputs.deletions }}
 
       - name: Apply labels
         if: steps.labels.outputs.labels != '[]'
         uses: actions/github-script@v7
         with:
           script: |
-            const labels = JSON.parse('${{ steps.labels.outputs.labels }}');
+            const labels = JSON.parse(`${{ steps.labels.outputs.labels }}`);
             if (labels.length) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: Number('${{ steps.ctx.outputs.number }}'),
+                issue_number: Number(`${{ steps.ctx.outputs.number }}`),
                 labels
               });
             }
@@ -158,12 +159,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const re = new RegExp(process.env.RE,'i');
-            const title = `${{ steps.ctx.outputs.title }}`;
+            const re = new RegExp(process.env.RE, 'i');
+            const title = `${{ steps.ctx.outputs.title }}`.trim();
             const ok = re.test(title);
             core.setOutput('ok', ok ? 'true' : 'false');
             if (!ok) {
-              core.warning(`PR title does not match Conventional Commit: "${title}"`);
+              core.warning(`PR title does not match Conventional Commits: "${title}"`);
             }
           env:
             RE: ${{ env.CONVENTIONAL_TITLE }}
@@ -173,13 +174,11 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const body = `${{ steps.ctx.outputs.body }}`;
+            const body = `${{ steps.ctx.outputs.body }}` || '';
             const required = `${{ env.REQUIRED_CHECKLIST }}`.split('|').map(s => s.trim());
-            const checkers = required.map(name => new RegExp(`- \$begin:math:display$(x|X)\\$end:math:display$\\s*${name}`, 'i'));
-            const missing = [];
-            for (let i=0; i<required.length; i++) {
-              if (!checkers[i].test(body)) missing.push(required[i]);
-            }
+            // Match '- [x] Name' (accept lower/upper X)
+            const makeRx = (n) => new RegExp(`- \$begin:math:display$(x|X)\\$end:math:display$\\s*${n}\\b`, 'i');
+            const missing = required.filter(name => !makeRx(name).test(body));
             core.setOutput('missing', JSON.stringify(missing));
             if (missing.length) {
               core.setFailed(`Missing required checklist items: ${missing.join(', ')}
@@ -197,28 +196,31 @@ Ensure your PR uses the provided template and check:
         uses: actions/github-script@v7
         with:
           script: |
-            const prNumber = Number('${{ steps.ctx.outputs.number }}');
-            const missing = JSON.parse('${{ steps.checklist.outputs.missing || '[]' }}');
-            const titleOK = '${{ steps.titlecheck.outputs.ok }}' === 'true';
-            const additions = Number('${{ steps.ctx.outputs.additions }}');
-            const deletions = Number('${{ steps.ctx.outputs.deletions }}');
-            const filesChanged = Number('${{ steps.ctx.outputs.changedFiles }}');
+            const prNumber    = Number(`${{ steps.ctx.outputs.number }}`);
+            const missing     = JSON.parse(`${{ steps.checklist.outputs.missing || '[]' }}`);
+            const titleOK     = `${{ steps.titlecheck.outputs.ok }}` === 'true';
+            const additions   = Number(`${{ steps.ctx.outputs.additions }}` || 0);
+            const deletions   = Number(`${{ steps.ctx.outputs.deletions }}` || 0);
+            const filesChanged= Number(`${{ steps.ctx.outputs.changedFiles }}` || 0);
+            const labelsJSON  = `${{ steps.labels.outputs.labels || '[]' }}`;
+            const labels      = JSON.parse(labelsJSON);
 
             const header = `### PR Validation Summary`;
-            const t = titleOK ? '✅ Title matches Conventional Commit' : '❌ Title not Conventional Commit';
-            const m = missing.length ? `❌ Missing checklist: ${missing.join(', ')}` : '✅ Checklist complete';
+            const t = titleOK ? '✅ Title matches Conventional Commits' : '❌ Title not Conventional Commits';
+            const m = (missing.length ? `❌ Missing checklist: ${missing.join(', ')}` : '✅ Checklist complete');
             const stats = `Δ Lines: +${additions}/-${deletions} • Files: ${filesChanged}`;
+            const lab = labels.length ? `Labels: \`${labels.join('`, `')}\`` : 'Labels: _(none)_';
 
             const body = `${header}
 
 ${t}
 ${m}
+${lab}
 
 **Stats:** ${stats}
 
 > Re-run checks by commenting \`/recheck\`.`;
 
-            // Find prior bot comment
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -226,19 +228,9 @@ ${m}
             });
             const bot = comments.find(c => c.user.type === 'Bot' && c.body && c.body.startsWith('### PR Validation Summary'));
             if (bot) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: bot.id,
-                body
-              });
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: bot.id, body });
             } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body
-              });
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber, body });
             }
 
       - name: Auto-approve trivial docs-only PRs
@@ -256,7 +248,7 @@ ${m}
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: Number('${{ steps.ctx.outputs.number }}'),
+              pull_number: Number(`${{ steps.ctx.outputs.number }}`),
               event: 'APPROVE',
               body: 'Auto-approved trivial docs-only PR (size threshold).'
             });
@@ -266,7 +258,7 @@ ${m}
         uses: actions/github-script@v7
         with:
           script: |
-            const files = JSON.parse('${{ steps.files.outputs.json }}');
+            const files = JSON.parse(`${{ steps.files.outputs.json || '[]' }}`);
             const reviewers = new Set();
             const teamReviewers = new Set();
 
@@ -277,21 +269,21 @@ ${m}
               }
             };
 
-            // Example mapping; adjust to your org/team
+            // Example mapping — customize to your org/team handles
             addIfAny(/^\.github\/workflows\//, [], ['devops']);
             addIfAny(/^world_engine\//, ['core-owner'], []);
             addIfAny(/^notebooks\/|\.ipynb$/, ['data-science-owner'], []);
             addIfAny(/^docs\/|\.md$/, ['docs-owner'], []);
             addIfAny(/^tests\//, ['qa-owner'], []);
 
-            const r = [...reviewers];
+            const r  = [...reviewers];
             const tr = [...teamReviewers];
             if (r.length || tr.length) {
               try {
                 await github.rest.pulls.requestReviewers({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  pull_number: Number('${{ steps.ctx.outputs.number }}'),
+                  pull_number: Number(`${{ steps.ctx.outputs.number }}`),
                   reviewers: r,
                   team_reviewers: tr
                 });
@@ -316,4 +308,4 @@ ${m}
               comment_id: context.payload.comment.id,
               content: 'rocket'
             });
-            // No-op: labeling/validation handled by main job (which also runs for /recheck due to job-level if)
+            // Nothing else to do — main job runs because of the job-level `if`
