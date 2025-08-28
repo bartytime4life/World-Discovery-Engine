@@ -1,0 +1,10 @@
+random_seed: 42
+sample_rows: 5000
+outputs_dir: wde_outputs
+notebook_name: WDE_Kaggle_Starter.ipynb
+artifacts:
+- demo_candidates_top50.csv
+- run_manifest.json
+limits:
+  runtime_hours: 8.0
+  memory_gb: 19.0
