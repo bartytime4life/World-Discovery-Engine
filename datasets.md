@@ -1,6 +1,4 @@
 
-⸻
-
 WDE Datasets — Sources, Access & Provenance
 
 This file is the single source of truth for data provenance, access methods, licensing, and reproducibility requirements of the World Discovery Engine (WDE).
