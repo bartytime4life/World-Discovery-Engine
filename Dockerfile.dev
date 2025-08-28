@@ -1,0 +1,104 @@
+# FILE: Dockerfile.dev
+# -------------------------------------------------------------------------------------------------
+# World Discovery Engine (WDE) — Development Dockerfile
+#
+# Goals
+#  - Fully functional geospatial + ML dev env (GDAL/PROJ/GEOS/PDAL + Python 3.12)
+#  - Poetry-managed deps (installs main + dev + geo/ml/viz/notebook extras)
+#  - Nice DX: git, make, curl, unzip, tini; non-root user; Jupyter ready
+#  - Lean dev workflow: no source copied (bind mount repo at runtime)
+#
+# Usage (with Makefile targets):
+#   make docker-build-dev
+#   make docker-run-dev   # binds current repo into /app
+# -------------------------------------------------------------------------------------------------
+
+FROM mambaorg/micromamba:1.5.8-bookworm
+
+# Micromamba & OS basics
+ENV MAMBA_DOCKERFILE_ACTIVATE=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash \
+      ca-certificates \
+      curl \
+      wget \
+      git \
+      git-lfs \
+      unzip \
+      nano \
+      vim \
+      make \
+      tini \
+      bash-completion \
+      libglib2.0-0 \
+    && git lfs install \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} app && useradd -m -u ${UID} -g app -s /bin/bash app
+WORKDIR /app
+RUN chown -R app:app /app
+USER app
+
+# --------------------------------------------------------------------------------------
+# Geospatial + Sci stack (conda-forge). Add/remove packages here if you need more.
+# --------------------------------------------------------------------------------------
+# Notes:
+#  - gdal/proj/geos/geotiff/rtree underpin geopandas, rasterio, fiona, shapely, pyproj
+#  - pdal for LiDAR (optional; remove if you want lighter images)
+#  - jupyter + nbconvert for notebook work
+RUN micromamba install -y -n base -c conda-forge \
+      python=3.12 \
+      gdal proj geos geotiff libspatialindex \
+      rasterio fiona shapely pyproj rtree geopandas \
+      numpy pandas scipy \
+      pdal \
+      jupyter jupyterlab nbconvert \
+      pip \
+    && micromamba clean -a -y
+
+# Helpful env knobs for GDAL/PROJ
+ENV GDAL_DISABLE_READDIR_ON_OPEN=TRUE \
+    OMP_NUM_THREADS=1 \
+    PROJ_NETWORK=ON
+
+# --------------------------------------------------------------------------------------
+# Poetry (no nested venv — installs into conda base)
+# --------------------------------------------------------------------------------------
+ENV POETRY_VERSION=1.8.3
+RUN python -m pip install --upgrade pip && \
+    python -m pip install "poetry==${POETRY_VERSION}" && \
+    poetry config virtualenvs.create false
+
+# --------------------------------------------------------------------------------------
+# Layer-cached dep install: copy manifests only, then poetry install
+# --------------------------------------------------------------------------------------
+# If you have a poetry.lock, uncomment the COPY below for better reproducibility/caching.
+COPY --chown=app:app pyproject.toml /app/
+# COPY --chown=app:app poetry.lock /app/
+
+# Install ALL extras for a complete dev stack; adjust if you prefer slimmer images.
+RUN poetry install --with dev,geo,ml,viz,notebook --no-root
+
+# --------------------------------------------------------------------------------------
+# (Optional) Enable bash completion & a friendly prompt
+# --------------------------------------------------------------------------------------
+RUN echo 'if [ -f /etc/bash_completion ]; then . /etc/bash_completion; fi' >> /home/app/.bashrc && \
+    echo 'export PS1="[WDE-dev] \u@\h:\w$ "' >> /home/app/.bashrc
+
+# --------------------------------------------------------------------------------------
+# Entrypoint / defaults
+# --------------------------------------------------------------------------------------
+# Use tini for proper signal handling, then drop into bash by default
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bash"]
+
+# For Jupyter convenience (if you’ll run it inside the container)
+EXPOSE 8888
