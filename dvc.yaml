@@ -1,34 +1,152 @@
 # FILE: dvc.yaml
 # -------------------------------------------------------------------------------------------------
+# World Discovery Engine (WDE) — DVC Pipeline
+# Stages:
+#  0) selftest   : quick integrity check (imports, configs, paths)
+#  1) ingest     : fetch & tile AOI, assemble raw overlay stack
+#  2) scan       : coarse anomaly detection (CV, texture, DEM cues)
+#  3) evaluate   : mid-scale evaluation (NDVI/EVI time series, geomorph/hydro, overlays)
+#  4) verify     : multi-proof fusion (ADE fingerprints, causal PAG, Bayesian GNN)
+#  5) report     : per-candidate dossiers (maps, plots, narratives)
+#  6) package    : bundle outputs (zip/tar) for sharing/Kaggle
+#
+# Notes:
+#  - Uses Poetry CLI entrypoint `wde` (world_engine.cli:app).
+#  - Tracks key knobs via params (configs/default.yaml).
+#  - Caches heavy data dirs; marks reports as outs-no-cache.
+#  - Emits JSON metrics and CSV plots for DVC UI.
+# -------------------------------------------------------------------------------------------------
+
 stages:
-  fetch_data:
-    cmd: poetry run python -m wde.data.fetch  # implement later
+  selftest:
+    cmd: poetry run wde selftest
     deps:
-      - src/wde/data/fetch.py
-      - configs/data.yaml
+      - world_engine/__init__.py
+      - world_engine/cli.py
+      - world_engine/utils
+      - configs/default.yaml
+    params:
+      - configs/default.yaml:
+          - aoi
+          - pipeline.tile_size_deg
+    outs:
+      - artifacts/selftest  # logs, pass/fail markers
+
+  ingest:
+    cmd: poetry run wde ingest --config configs/default.yaml --out data/raw
+    deps:
+      - world_engine/ingest.py
+      - world_engine/utils
+      - configs/default.yaml
+    params:
+      - configs/default.yaml:
+          - aoi
+          - datasets
+          - pipeline.tile_size_deg
+          - runtime
     outs:
       - data/raw
-  preprocess:
-    cmd: poetry run python -m wde.data.preprocess
+
+  scan:
+    cmd: poetry run wde scan --config configs/default.yaml --in data/raw --out artifacts/candidates
     deps:
-      - src/wde/data/preprocess.py
+      - world_engine/detect.py
+      - world_engine/utils
       - data/raw
-      - configs/preprocess.yaml
+      - configs/default.yaml
+    params:
+      - configs/default.yaml:
+          - pipeline.anomaly_threshold
+          - pipeline.anomaly_model
     outs:
-      - data/processed
-  detect:
-    cmd: poetry run python -m wde.detect.run
+      - path: artifacts/candidates
+        checkpoint: true
+    metrics:
+      - artifacts/metrics/scan_summary.json
+    plots:
+      - artifacts/plots/scan_anomaly_hist.csv:
+          x: score
+          y: count
+
+  evaluate:
+    cmd: poetry run wde evaluate --config configs/default.yaml --in artifacts/candidates --out artifacts/evaluated
     deps:
-      - src/wde/detect/run.py
-      - data/processed
-      - configs/detect.yaml
-    outs:
+      - world_engine/evaluate.py
+      - world_engine/utils
       - artifacts/candidates
-  dossier:
-    cmd: poetry run python -m wde.dossier.build
+      - configs/default.yaml
+    params:
+      - configs/default.yaml:
+          - pipeline.ndvi
+          - pipeline.geomorph
+          - pipeline.hydro
+    outs:
+      - path: artifacts/evaluated
+        checkpoint: true
+    metrics:
+      - artifacts/metrics/eval_summary.json
+    plots:
+      - artifacts/plots/ndvi_timeseries.csv:
+          x: date
+          y: ndvi
+      - artifacts/plots/elevation_relief.csv:
+          x: distance_m
+          y: relieft_m
+
+  verify:
+    cmd: poetry run wde verify --config configs/default.yaml --in artifacts/evaluated --out artifacts/verified
     deps:
-      - src/wde/dossier/build.py
-      - artifacts/candidates
-      - configs/dossier.yaml
+      - world_engine/verify.py
+      - world_engine/models
+      - world_engine/utils
+      - artifacts/evaluated
+      - configs/default.yaml
+    params:
+      - configs/default.yaml:
+          - pipeline.ade_fingerprints
+          - pipeline.causal
+          - pipeline.uncertainty
     outs:
+      - artifacts/verified
+    metrics:
+      - artifacts/metrics/verify_summary.json
+      - artifacts/metrics/verified_candidates.json
+    plots:
+      - artifacts/plots/uncertainty_hist.csv:
+          x: probability
+          y: count
+      - artifacts/plots/coverage_by_modality.csv:
+          x: modality
+          y: coverage
+
+  report:
+    cmd: poetry run wde report --config configs/default.yaml --in artifacts/verified --out artifacts/dossiers
+    deps:
+      - world_engine/report.py
+      - world_engine/utils
+      - artifacts/verified
+      - configs/default.yaml
+    params:
+      - configs/default.yaml:
+          - output.report_format
+          - output.save_geojson
+    outs-no-cache:
       - artifacts/dossiers
+    metrics:
+      - artifacts/metrics/report_summary.json
+    plots:
+      - artifacts/plots/dossier_sizes.csv:
+          x: candidate_id
+          y: size_kb
+
+  package:
+    cmd: |
+      mkdir -p artifacts/bundles && \
+      tar -czf artifacts/bundles/wde_results.tgz artifacts/verified artifacts/dossiers artifacts/metrics artifacts/plots
+    deps:
+      - artifacts/verified
+      - artifacts/dossiers
+      - artifacts/metrics
+      - artifacts/plots
+    outs-no-cache:
+      - artifacts/bundles/wde_results.tgz
