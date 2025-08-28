@@ -1,0 +1,89 @@
+name: PR Labeler & Checklist Guard
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR body
+        id: pr
+        uses: actions-ecosystem/action-get-merged-pull-request@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Fallback get PR via API (opened PRs)
+        if: steps.pr.outcome != 'success'
+        id: pr_fallback
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+            core.setOutput('body', pr.data.body || '');
+            core.setOutput('title', pr.data.title || '');
+          result-encoding: string
+
+      - name: Select PR text
+        id: text
+        run: |
+          echo "BODY<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ steps.pr.outputs.body || steps.pr_fallback.outputs.body }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Apply labels based on content
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `${{ steps.text.outputs.BODY }}`.toLowerCase();
+            const labels = new Set();
+
+            if (body.includes('ethics') || body.includes('sovereignty') || body.includes('mask')) labels.add('ethics');
+            if (body.includes('dataset') || body.includes('dvc') || body.includes('datasets.md')) labels.add('datasets');
+            if (body.includes('reproducibility') || body.includes('seed') || body.includes('dockerfile') || body.includes('poetry')) labels.add('reproducibility');
+            if (body.includes('notebook') || body.includes('kaggle')) labels.add('notebooks');
+            if (body.includes('cli') || body.includes('typer') || body.includes('makefile')) labels.add('cli');
+            if (body.includes('ci') || body.includes('github actions')) labels.add('ci');
+
+            if (labels.size > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: Array.from(labels)
+              });
+            }
+
+      - name: Checklist guard (fail if required boxes not checked)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `${{ steps.text.outputs.BODY }}`;
+            const required = [
+              /- \[x\] Ethics/i,
+              /- \[x\] Reproducibility/i,
+              /- \[x\] Datasets/i,
+              /- \[x\] Tests/i,
+              /- \[x\] CI Green/i
+            ];
+            const missing = required.filter(rx => !rx.test(body)).map(rx => rx.toString());
+            if (missing.length) {
+              core.setFailed(`Missing required checklist items: ${missing.join(', ')}
+
+Ensure your PR uses the provided template and check:
+- Ethics (coords masking, sovereignty banner, license verification)
+- Reproducibility (seeds, config logging, Docker/Poetry)
+- Datasets (registry entries, no large binaries)
+- Tests (unit/integration)
+- CI Green`);
+            }
