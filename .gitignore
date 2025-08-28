@@ -1,61 +1,144 @@
 # FILE: .gitignore
 # -------------------------------------------------------------------------------------------------
-# Python
+# 🌍 World Discovery Engine (WDE) — Ultimate .gitignore
+# Hardened to support Python, geospatial data, Kaggle workflows, DVC, CI/CD, and reproducibility.
+# -------------------------------------------------------------------------------------------------
+
+# ----------------------------
+# Python / Build Artifacts
+# ----------------------------
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 *.so
+*.dylib
+*.egg
 *.egg-info/
-.build/
-dist/
-build/
 .eggs/
-.ipynb_checkpoints/
-*.ipynb_convert/
+build/
+dist/
+*.manifest
+*.spec
+
+# Bytecode / caches
 .mypy_cache/
 .pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
 .cache/
-*.log
-*.sqlite
-*.db
+.ipynb_checkpoints/
 
-# Envs
+# ----------------------------
+# Environments / Secrets
+# ----------------------------
 .env
 .venv/
 venv/
+ENV/
+env.bak/
 .envrc
 *.env.*
-
-# Data & artifacts (use DVC for versioning large files)
-data/
-artifacts/
-!data/.gitkeep
-!artifacts/.gitkeep
-
-# DVC internals safe list (we commit .dvc/, dvc.yaml, *.dvc)
-.dvc/cache/
-.dvc/tmp/
-.dvc/config.local
-
-# Notebooks & reports
-*.nbconvert.ipynb
-site/
-reports/
-
-# GIS / raster spillover
-*.aux.xml
-*.ovr
-*.tfw
-*.prj
-*.sidecar
-*.worldfile
-
-# Secrets & tokens
+*.secret.*
 kaggle.json
 *.key
 *.pem
 
-# OS
+# ----------------------------
+# Data & Artifacts (managed by DVC/Kaggle)
+# ----------------------------
+data/
+artifacts/
+outputs/
+reports/
+site/
+
+# keep placeholders if needed
+!data/.gitkeep
+!artifacts/.gitkeep
+!outputs/.gitkeep
+!reports/.gitkeep
+
+# DVC internals (safe to ignore; commit only tracked metadata)
+.dvc/cache/
+.dvc/tmp/
+.dvc/config.local
+*.dvc.lock
+
+# ----------------------------
+# Geospatial / GIS spillover
+# ----------------------------
+*.aux.xml
+*.ovr
+*.tfw
+*.prj
+*.wld
+*.worldfile
+*.sidecar
+*.sbx
+*.shp.*
+*.gdb/
+*.gpkg-journal
+
+# Raster/point cloud scratch
+*.vrt
+*.tif.aux.xml
+*.las
+*.laz
+
+# ----------------------------
+# Notebooks / Exports
+# ----------------------------
+*.nbconvert.ipynb
+*.ipynb_convert/
+*.ipynb_checkpoints/
+*.ipynb_diff
+*.out.ipynb
+
+# ----------------------------
+# Logs / Temp
+# ----------------------------
+*.log
+logs/
+*.bak
+*.swp
+*.swo
+*.tmp
+*.temp
+*.lock
+*.pid
+
+# ----------------------------
+# IDE / Editors
+# ----------------------------
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ----------------------------
+# OS cruft
+# ----------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ----------------------------
+# CI / Deployment
+# ----------------------------
+*.retry
+docker-compose.override.yml
+.env.test
+.env.local
+.env.production
+*.pytest_cache/
+*.hypothesis/
