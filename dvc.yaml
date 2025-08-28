@@ -1,25 +1,26 @@
 # FILE: dvc.yaml
 # -------------------------------------------------------------------------------------------------
-# World Discovery Engine (WDE) — DVC Pipeline
-# Stages:
-#  0) selftest   : quick integrity check (imports, configs, paths)
-#  1) ingest     : fetch & tile AOI, assemble raw overlay stack
-#  2) scan       : coarse anomaly detection (CV, texture, DEM cues)
-#  3) evaluate   : mid-scale evaluation (NDVI/EVI time series, geomorph/hydro, overlays)
-#  4) verify     : multi-proof fusion (ADE fingerprints, causal PAG, Bayesian GNN)
-#  5) report     : per-candidate dossiers (maps, plots, narratives)
-#  6) package    : bundle outputs (zip/tar) for sharing/Kaggle
+# 🌍 World Discovery Engine (WDE) — DVC Pipeline (Ultimate, reproducible, evidence-rich)
 #
-# Notes:
-#  - Uses Poetry CLI entrypoint `wde` (world_engine.cli:app).
-#  - Tracks key knobs via params (configs/default.yaml).
-#  - Caches heavy data dirs; marks reports as outs-no-cache.
-#  - Emits JSON metrics and CSV plots for DVC UI.
+# Goals
+#  - Deterministic, stage-by-stage pipeline with cached heavy artifacts and light, portable reports
+#  - Rich metrics/plots surfaced in DVC UI (JSON + CSV) for anomaly, validation, and report quality
+#  - Ethics guardrails and provenance recorded as first-class stages
+#  - Ready for local + CI + Kaggle: Poetry CLI entrypoints, explicit deps/outs, and checkpoints
+#
+# Conventions
+#  - All knobs read from configs/default.yaml via params
+#  - Heavy intermediates cached (data/raw, artifacts/candidates, artifacts/evaluated, artifacts/verified)
+#  - Human-readable dossiers and bundles marked outs-no-cache
+#  - Stage descriptions (desc) and working dirs (wdir) for clarity and isolation
 # -------------------------------------------------------------------------------------------------
 
 stages:
+
   selftest:
-    cmd: poetry run wde selftest
+    desc: "Quick integrity check (imports, config sanity, paths)"
+    wdir: .
+    cmd: poetry run wde selftest --config configs/default.yaml
     deps:
       - world_engine/__init__.py
       - world_engine/cli.py
@@ -29,10 +30,15 @@ stages:
       - configs/default.yaml:
           - aoi
           - pipeline.tile_size_deg
+          - runtime
     outs:
-      - artifacts/selftest  # logs, pass/fail markers
+      - artifacts/selftest
+    metrics:
+      - artifacts/selftest/selftest_report.json
 
   ingest:
+    desc: "Fetch & tile AOI; assemble raw overlay stack (imagery, DEM, overlays)"
+    wdir: .
     cmd: poetry run wde ingest --config configs/default.yaml --out data/raw
     deps:
       - world_engine/ingest.py
@@ -46,8 +52,16 @@ stages:
           - runtime
     outs:
       - data/raw
+    metrics:
+      - artifacts/metrics/ingest_summary.json
+    plots:
+      - artifacts/plots/ingest_tiles_by_size.csv:
+          x: tile_id
+          y: pixels
 
   scan:
+    desc: "Coarse anomaly detection (CV, texture, DEM cues) → candidate tiles"
+    wdir: .
     cmd: poetry run wde scan --config configs/default.yaml --in data/raw --out artifacts/candidates
     deps:
       - world_engine/detect.py
@@ -69,6 +83,8 @@ stages:
           y: count
 
   evaluate:
+    desc: "Mid-scale evaluation (NDVI/EVI time series, geomorph/hydro, overlays)"
+    wdir: .
     cmd: poetry run wde evaluate --config configs/default.yaml --in artifacts/candidates --out artifacts/evaluated
     deps:
       - world_engine/evaluate.py
@@ -85,15 +101,18 @@ stages:
         checkpoint: true
     metrics:
       - artifacts/metrics/eval_summary.json
+      - artifacts/metrics/ndvi_consistency.json
     plots:
       - artifacts/plots/ndvi_timeseries.csv:
           x: date
           y: ndvi
       - artifacts/plots/elevation_relief.csv:
           x: distance_m
-          y: relieft_m
+          y: relief_m
 
   verify:
+    desc: "Multi-proof fusion (ADE fingerprints, causal PAG, Bayesian GNN) → verified candidates"
+    wdir: .
     cmd: poetry run wde verify --config configs/default.yaml --in artifacts/evaluated --out artifacts/verified
     deps:
       - world_engine/verify.py
@@ -111,6 +130,7 @@ stages:
     metrics:
       - artifacts/metrics/verify_summary.json
       - artifacts/metrics/verified_candidates.json
+      - artifacts/metrics/pag_quality.json
     plots:
       - artifacts/plots/uncertainty_hist.csv:
           x: probability
@@ -118,8 +138,15 @@ stages:
       - artifacts/plots/coverage_by_modality.csv:
           x: modality
           y: coverage
+      - artifacts/plots/ade_fingerprint_matrix.csv:
+          template: confusion
+          x: fingerprint
+          y: present
+          title: "ADE Fingerprints Presence Matrix"
 
   report:
+    desc: "Per-candidate dossiers (maps, plots, narratives) + indices + report summary"
+    wdir: .
     cmd: poetry run wde report --config configs/default.yaml --in artifacts/verified --out artifacts/dossiers
     deps:
       - world_engine/report.py
@@ -130,19 +157,53 @@ stages:
       - configs/default.yaml:
           - output.report_format
           - output.save_geojson
+          - output.public
+    # Dossiers are human-friendly and can be large → do not cache these to DVC
     outs-no-cache:
       - artifacts/dossiers
+    # Machine-friendlies emitted alongside dossiers for DVC UI & CI checks
     metrics:
       - artifacts/metrics/report_summary.json
+      - artifacts/metrics/run_manifest.json
     plots:
       - artifacts/plots/dossier_sizes.csv:
           x: candidate_id
           y: size_kb
 
+  ethics:
+    desc: "Ethics guardrails validation (coordinate masking, sovereignty flags, license checks)"
+    wdir: .
+    cmd: poetry run wde report --config configs/default.yaml --in artifacts/verified --out artifacts/dossiers --public --ethical-mode --mask-precision 2
+    deps:
+      - world_engine/ethics_guardrails.py
+      - world_engine/report.py
+      - artifacts/verified
+      - configs/default.yaml
+    # No additional outs; this stage validates + annotates dossiers and produces metrics
+    metrics:
+      - artifacts/metrics/ethics_summary.json
+      - artifacts/metrics/sovereignty_overlap.json
+    plots:
+      - artifacts/plots/sovereignty_overlap_by_region.csv:
+          x: region
+          y: candidates
+
+  provenance:
+    desc: "Write pipeline run provenance (config hash, seeds, timestamps, git sha)"
+    wdir: .
+    cmd: poetry run python - << 'PY'\nimport json,os,time,hashlib\nfrom pathlib import Path\ncfg='configs/default.yaml'\nsha=lambda p:'sha256:'+hashlib.sha256(Path(p).read_bytes()).hexdigest()\nos.makedirs('artifacts/metrics',exist_ok=True)\nmanifest={\n  'timestamp_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),\n  'config_path': cfg,\n  'config_hash': sha(cfg) if Path(cfg).exists() else None,\n  'seed_numpy': int(os.environ.get('SEED_NUMPY','42')),\n  'seed_random': int(os.environ.get('SEED_RANDOM','42')),\n  'seed_torch': int(os.environ.get('SEED_TORCH','42')),\n}\nPath('artifacts/metrics/run_manifest.json').write_text(json.dumps(manifest,indent=2))\nprint('Wrote artifacts/metrics/run_manifest.json')\nPY
+    deps:
+      - configs/default.yaml
+    metrics:
+      - artifacts/metrics/run_manifest.json
+
   package:
+    desc: "Bundle verified outputs + metrics/plots into an archive for sharing/Kaggle"
+    wdir: .
     cmd: |
       mkdir -p artifacts/bundles && \
-      tar -czf artifacts/bundles/wde_results.tgz artifacts/verified artifacts/dossiers artifacts/metrics artifacts/plots
+      tar -czf artifacts/bundles/wde_results.tgz \
+        artifacts/verified artifacts/dossiers artifacts/metrics artifacts/plots
     deps:
       - artifacts/verified
       - artifacts/dossiers
@@ -150,3 +211,21 @@ stages:
       - artifacts/plots
     outs-no-cache:
       - artifacts/bundles/wde_results.tgz
+
+# -----------------------------------------------------------------------------------------------
+# Optional: Example foreach to fan out multiple AOIs (uncomment to use)
+#
+# stages:
+#   ingest:
+#     foreach:
+#       - configs/aois/amazon_west.yaml
+#       - configs/aois/amazon_central.yaml
+#     do:
+#       cmd: poetry run wde ingest --config ${item} --out data/raw/${item.basename}
+#       deps:
+#         - world_engine/ingest.py
+#         - world_engine/utils
+#         - ${item}
+#       outs:
+#         - data/raw/${item.basename}
+# -----------------------------------------------------------------------------------------------
