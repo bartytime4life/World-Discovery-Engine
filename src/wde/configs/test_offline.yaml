@@ -1,0 +1,155 @@
+# configs/test_offline.yaml
+# Offline test config: consumes fixtures from tests/data/
+# Usage:
+#   wde full-run --config configs/test_offline.yaml
+# or run stepwise:
+#   wde ingest --config configs/test_offline.yaml
+#   wde scan --config configs/test_offline.yaml
+#   wde evaluate --config configs/test_offline.yaml
+#   wde verify --config configs/test_offline.yaml
+#   wde report --config configs/test_offline.yaml
+
+run_profile: "light-offline"
+
+aoi:
+  # small 0.05° box around (-3.50, -60.50) → matches test fixtures
+  geojson: "tests/data/aoi/test_bbox.geojson"
+
+runtime:
+  use_gpu: false
+  num_workers: 0
+  deterministic: true
+  random_seed: 42
+  allow_internet: false        # hard block remote fetch
+  cache_dir: "data/interim"    # optional local cache
+
+datasets:
+  # All paths are local fixtures in EPSG:4326
+  optical_rgb:
+    path: "tests/data/rasters/optical_rgb_256.tif"
+    bands: ["R","G","B"]
+    dtype: uint8
+  sar_backscatter:
+    path: "tests/data/rasters/sar_backscatter_50m.tif"
+    units: "dB"
+    dtype: float32
+  dem:
+    path: "tests/data/rasters/dem_50m.tif"
+    dtype: float32
+  soil_p_ppm:
+    path: "tests/data/rasters/soil_p_ppm_50m.tif"
+    dtype: uint16
+  landcover:
+    path: "tests/data/rasters/landcover_50m.tif"
+    classes:
+      1: forest
+      2: indicator_palm_patch
+  ndvi_timeseries:
+    csv: "tests/data/time_series/ndvi_site_vs_bg.csv"
+    columns:
+      month: "month"
+      site: "site_ndvi"
+      background: "bg_ndvi"
+  historical_text:
+    path: "tests/data/text/historical_snippet.txt"
+  pag_mock:
+    path: "tests/data/graphs/pag_mock.gml"
+
+pipeline:
+  # tile smaller region into a single tile to keep tests fast
+  tile_size_deg: 0.05
+  resample:
+    optical: 0.0002   # ~22 m (matches fixture transform)
+    sar:     0.001    # ~111 m
+    dem:     0.001
+    soil:    0.001
+    landcover: 0.001
+
+  steps:
+    ingest:
+      enable: true
+      strict_local_only: true
+    detect:
+      enable: true
+      cv:
+        canny:
+          threshold1: 50
+          threshold2: 150
+        hough:
+          lines: false
+          circles: false
+      texture:
+        glcm: false
+        lbp:  false
+      dem_relief:
+        hillshade: false
+      vlm_caption:
+        enable: false            # offline/light mode
+      anomaly_score:
+        weights:
+          edges: 1.0
+          texture: 0.0
+          dem: 0.0
+        threshold: 1            # >0 edges marks anomaly in fixtures
+    evaluate:
+      enable: true
+      ndvi_timeseries:
+        enable: true
+        dry_months: [7, 8, 9]
+        site_column: "site_ndvi"
+        bg_column:   "bg_ndvi"
+        criterion: "site_mean_dry > bg_mean_dry"
+      hydro_geomorph:
+        enable: true
+        near_water_km: 6.0      # placeholder check
+      lidar:
+        enable: false           # no LiDAR in offline fixtures (DEM only)
+    verify:
+      enable: true
+      multiproof:
+        require_modalities: 2   # e.g., NDVI + geomorph/soil/text
+        modalities:
+          - ndvi_timeseries
+          - soil_p_peak
+          - geomorph_bump
+          - landcover_indicator
+          - historical_keyword
+      ade_fingerprints:
+        enable: true
+        rules:
+          dry_season_ndvi_peaks: true
+          indicator_species_patch: true
+          soil_p_threshold_ppm: 800
+          geomorph_mound_check: true
+      causal_graph:
+        enable: true
+        source: "tests/data/graphs/pag_mock.gml"
+      uncertainty:
+        enable: false           # skip heavy Bayesian/GNN in light-offline
+      ssim_counterfactual:
+        enable: false           # skip in light-offline
+    report:
+      enable: true
+      outputs:
+        root_dir: "data/output/tests_offline"
+        geojson_name: "candidates.geojson"
+        json_name: "candidates.json"
+        dossiers_dir: "reports"
+        include:
+          maps: true
+          ndvi_plots: true
+          soil_maps: true
+          landcover: true
+          sar: true
+          pag_graph: true
+          confidence_narrative: true
+      redact_sensitive_coords: true  # always on in defaults
+
+thresholds:
+  anomaly_min_edges: 1
+  soil_p_peak_ppm: 800
+  geomorph_bump_sigma: 5.0
+
+logging:
+  level: "INFO"
+  to_file: false
