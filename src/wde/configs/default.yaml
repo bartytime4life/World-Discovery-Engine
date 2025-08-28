@@ -1,0 +1,185 @@
+# ==============================================================================
+# 🌍 World Discovery Engine (WDE) — Default Configuration
+# File: configs/default.yaml
+# Design goals: config-driven, reproducible, Kaggle/CI-friendly, ethics-aware
+# Matches repository + CLI stages described in the WDE spec and repo structure.
+# - Discovery Funnel stages & evidence stack: ingest/detect/evaluate/verify/report  :contentReference[oaicite:0]{index=0}
+# - Repository & CLI layout (world_engine/*, Typer CLI):                        :contentReference[oaicite:1]{index=1}
+# - Kaggle-ready notebook scaffold & defaults:                                   :contentReference[oaicite:2]{index=2}
+# - Open data connectivity (Sentinel, ASF, SRTM, SoilGrids, NICFI, etc.):        :contentReference[oaicite:3]{index=3}
+# ==============================================================================
+
+project:
+  name: "World Discovery Engine (WDE)"
+  seed: 42
+  # Reproducibility: set all library RNGs where possible (Torch, NumPy, etc.).   :contentReference[oaicite:4]{index=4}
+
+runtime:
+  use_gpu: auto         # auto|true|false
+  num_workers: 4
+  log_level: INFO
+  cache_dir: ".cache/wde"         # local download/cache for tiles & rasters
+  tmp_dir: ".cache/wde/tmp"
+  outputs_dir: "outputs"          # pipeline will create subdirs per stage
+
+aoi:
+  # You can swap to a GeoJSON path at any time:
+  # geojson: "data/aoi/amazon_demo.geojson"
+  bbox: [-3.50, -60.50, -3.40, -60.40]    # [min_lat, min_lon, max_lat, max_lon]
+  crs: "EPSG:4326"
+  note: "Small Amazon demo AOI; adjust for real runs."  # Demo-sized AOI as in the scaffold  :contentReference[oaicite:5]{index=5}
+
+tiling:
+  tile_size_deg: 0.05   # ~5 km tiles; tune as needed                              :contentReference[oaicite:6]{index=6}
+  overlap_deg: 0.00     # optional overlap for edge-safe processing
+  align_grid: true
+
+io:
+  # Stage-wise default folders (CLI allows --in/--out to override at runtime).
+  ingest_dir:    "outputs/ingested"
+  detect_dir:    "outputs/detected"
+  evaluate_dir:  "outputs/evaluated"
+  verify_dir:    "outputs/verified"
+  report_dir:    "outputs/reports"
+
+data:
+  # All sources are open or free-to-access with tokens; use Kaggle secrets/env.
+  # You can run in "demo" mode first (set enabled: false) to exercise the pipeline.
+  sentinel2:
+    enabled: false              # turn on after testing; see access notes below     :contentReference[oaicite:7]{index=7}
+    provider: "Copernicus Data Space / AWS Open Data"
+    # If using Copernicus: requires account; for AWS, unsigned GETs are possible.  :contentReference[oaicite:8]{index=8}
+    stac_endpoint: "https://catalogue.dataspace.copernicus.eu/stac"
+    aws_bucket: "s3://sentinel-s2-l2a"     # example; adjust to actual hosted path
+    bands: ["B02","B03","B04","B08","B11","B12"]   # RGB + NIR + SWIR
+    scale_factor: 0.0001
+    cloud_mask: true
+    max_cloud_percent: 20
+    date_range: ["2019-01-01", "2020-12-31"]
+  sentinel1:
+    enabled: false              # IW/GRD recommended for backscatter maps          :contentReference[oaicite:9]{index=9}
+    provider: "NASA ASF DAAC / Copernicus"
+    vertex_api: "https://api.daac.asf.alaska.edu/services/search/param"
+    product: "GRD"
+    polarization: ["VV","VH"]
+    earthdata_user: "${EARTHDATA_USER:-}"
+    earthdata_pass: "${EARTHDATA_PASS:-}"
+  landsat:
+    enabled: false              # Optional optical complement (public domain)      :contentReference[oaicite:10]{index=10}
+    provider: "USGS EarthExplorer / AWS"
+    collection: "LANDSAT_8_C2_L2"
+    max_cloud_percent: 10
+    date_range: ["2019-01-01", "2020-12-31"]
+  dem:
+    enabled: true               # Use open DEM for terrain (SRTM/Copernicus)       :contentReference[oaicite:11]{index=11}
+    source: "SRTMGL1v3"         # SRTM 30m; Earthdata login or OpenTopography      :contentReference[oaicite:12]{index=12}
+    fallback: "Copernicus_30m"
+    resample_to_m: 30
+  soilgrids:
+    enabled: false              # ADE proxy via soil P / C / pH grids              :contentReference[oaicite:13]{index=13}
+    provider: "ISRIC SoilGrids 250m"
+    layers: ["phh2o","soc","ocd","phosphorus"]     # set to the layers you need
+  nicfi:
+    enabled: false              # Hi-res tropical mosaics (API key required)       :contentReference[oaicite:14]{index=14}
+    api_key: "${PLANET_API_KEY:-}"
+    date: "2023-03"
+    quad_bbox_pad_deg: 0.05
+  gedi:
+    enabled: false              # Spaceborne LiDAR footprints (optional)
+  overlays:
+    historical_docs: []         # e.g., ["data/overlays/diary_1770.pdf"]
+    historical_maps: []         # e.g., ["data/overlays/old_map.tif"]
+    user_geojson: []            # e.g., ["data/overlays/user_points.geojson"]
+
+preprocess:
+  target_resolution_m: 10       # unify stacks (resample higher to lower properly)
+  normalize_optical: true
+  normalize_radar: true
+  harmonize_crs: "EPSG:3857"    # or keep native; set to EPSG:4326 for simplicity
+
+detect:
+  # Coarse scan — fast, explainable CV + optional VLM scoring                    :contentReference[oaicite:15]{index=15}
+  canny:
+    enabled: true
+    threshold1: 50
+    threshold2: 150
+  hough:
+    enabled: false              # enable if searching lines/circles explicitly
+    min_line_length: 40
+    max_line_gap: 5
+  texture:
+    enabled: false              # LBP/GLCM; enable when using optical stacks
+    lbp_radius: 2
+    lbp_points: 16
+  dem_microrelief:
+    enabled: true               # hillshade/LRM for subtle earthworks
+    multi_hillshade: true
+  vlm_caption:
+    enabled: false              # zero-shot caption/keywords (CLIP/PaLI/Gemma)     :contentReference[oaicite:16]{index=16}
+    keywords: ["mound","ring","ditch","rectangular clearing","grid","terrace"]
+  aggregation:
+    weights:
+      canny: 1.0
+      texture: 0.5
+      dem_microrelief: 1.0
+      vlm_caption: 0.75
+    score_threshold: 10         # raise/lower as your AOI/scale demands
+
+evaluate:
+  # Mid-scale evaluation — seasonal vegetation, hydro-geomorph context, LiDAR    :contentReference[oaicite:17]{index=17}
+  ndvi:
+    enabled: true
+    index: "NDVI"
+    date_range: ["2019-01-01","2020-12-31"]
+    min_observations: 6
+    seasonality_check: true     # expect persistent anomalies across seasons
+  hydrogeomorph:
+    enabled: true
+    rivers_source: "HydroSHEDS" # check terrace/floodplain proximity               :contentReference[oaicite:18]{index=18}
+    terrace_check: true
+    slope_max_deg: 8
+  lidar:
+    enabled: false              # enable if GEDI or airborne LiDAR available
+    canopy_remove: true
+  historical_crossref:
+    enabled: true
+    ocr_search_terms: ["black earth","terra preta","mound","village","earthwork"]
+
+verify:
+  # Verification & evidence fusion — multi-proof + ADE fingerprints + causality   :contentReference[oaicite:19]{index=19}
+  multiproof_required: 2        # require ≥ 2 independent modalities
+  ade_fingerprints:
+    enabled: true
+    seasonal_ndvi_peak: true    # ADE: lush growth in dry season                    :contentReference[oaicite:20]{index=20}
+    floristic_signatures: false # turn on if species layers/labels available        :contentReference[oaicite:21]{index=21}
+    micro_topography: true      # ring/raised fields; geometry vs natural fractal   :contentReference[oaicite:22]{index=22}
+  causal_fci:
+    enabled: true               # build PAG to check plausible cause→effect chains  :contentReference[oaicite:23]{index=23}
+  bgnn_uncertainty:
+    enabled: false              # enable if model weights present                   :contentReference[oaicite:24]{index=24}
+    model_path: "models/bgnn.pt"
+  ssim_counterfactual:
+    enabled: true               # ablation-style what-if checks                     :contentReference[oaicite:25]{index=25}
+
+report:
+  format: "pdf"                 # pdf|html|md
+  include_maps: true
+  include_time_series: true
+  include_uncertainty: true
+  mask_sensitive_coords: true   # ethics: round/blur coords by default              :contentReference[oaicite:26]{index=26}
+  round_coords_decimals: 2
+  include_ethics_notice: true   # CARE/data sovereignty reminder in each dossier     :contentReference[oaicite:27]{index=27}
+
+ethics:
+  care_principles: true         # CARE: Collective Benefit, Authority, Responsibility, Ethics  :contentReference[oaicite:28]{index=28}
+  indigenous_boundary_check:
+    enabled: true               # flag detections within Indigenous territories
+    dataset: "data/ethics/indigenous_boundaries.geojson"
+  legal_compliance_region:
+    code: "BR"                  # e.g., IPHAN context in Brazil                     :contentReference[oaicite:29]{index=29}
+    mask_exact_coords_by_default: true
+    require_review_before_public_release: true
+
+debug:
+  save_intermediates: false
+  keep_temp_tiles: false
