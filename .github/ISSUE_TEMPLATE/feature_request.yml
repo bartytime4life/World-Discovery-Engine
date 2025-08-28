@@ -1,0 +1,100 @@
+# .github/ISSUE_TEMPLATE/feature_request.yml
+name: "🌱 Feature Request"
+description: "For new functionality beyond configs/performance (e.g., new anomaly detector, new ADE proxy)."
+title: "[feature] <short, imperative summary>"
+labels:
+  - enhancement
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🌱 Feature Request — Problem → Proposal → Validation
+        Focus on the user impact and scientific value. Provide scope, alternatives, and acceptance criteria.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement / User Story
+      placeholder: "As a researcher, I need symbolic violation heatmaps in the dashboard to triage planets faster."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: High-level design; modules to change/add; CLI flags; data/diagnostics impacts.
+      placeholder: "Add `symbolic_violation_overlay.py`; integrate into `generate_html_report.py`; CLI `spectramind diagnose symbolic-rank`."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope & Non-Goals
+      placeholder: "Includes: per-rule heatmaps; Excludes: training new symbolic NN in this PR."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      placeholder: "Leverage existing SHAP overlays; defer to post-processing; use minimal CSV export only."
+    validations:
+      required: false
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks & Ethics
+      description: Bias, misuse, failure modes, resource costs.
+      placeholder: "Potential overemphasis on symbolic violations vs calibration; add disclaimer and thresholds."
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      placeholder: "Dashboard shows top-5 violated rules per planet; CLI flag documented; unit tests pass."
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Success Metrics
+      placeholder: "Reduction in triage time by 25%; improved GLL by 0.02 on validation set."
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / Affected Areas
+      placeholder: "generate_html_report.py, cli_diagnose.py, symbolic_logic_engine.py"
+    validations:
+      required: false
+
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Links / Artifacts
+      placeholder: "- Design doc: …  - Prototype notebook: …  - Related issues/PRs: …"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Review Gate
+      options:
+        - label: I defined clear acceptance criteria and user impact.
+          required: true
+        - label: I identified scope and major dependencies.
+          required: true
+        - label: I considered alternatives and risks.
+          required: true
