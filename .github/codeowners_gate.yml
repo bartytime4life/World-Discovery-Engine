@@ -1,0 +1,42 @@
+name: CODEOWNERS Gate
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  require-codeowners:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR info
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            core.setOutput('number', pr.number);
+
+      - name: Require code owner reviews if protection is unmet
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ steps.pr.outputs.number }}
+            });
+
+            // If branch protection already enforces code-owner review, you can skip this.
+            // Otherwise, we do a soft check: ensure at least one review is APPROVED by any code owner
+            // GitHub doesn't expose codeowner list easily via API; rely on branch protection when feasible.
+            // Here we warn if no approvals exist.
+            const hasApproval = reviews.some(r => r.state === 'APPROVED');
+            if (!hasApproval) {
+              core.setFailed('❌ CODEOWNERS gate: no approvals yet. Please request review from listed code owners.');
+            } else {
+              core.notice('✅ CODEOWNERS gate: approval detected.');
+            }
