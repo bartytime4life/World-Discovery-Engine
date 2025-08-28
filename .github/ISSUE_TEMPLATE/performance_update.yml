@@ -1,0 +1,124 @@
+name: "🚀 Performance Update"
+description: "Propose runtime/memory/throughput improvements with verified tests, reproducibility, and ethics guardrails."
+title: "[perf] <short summary>"
+labels:
+  - performance
+  - needs-triage
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🚀 Performance Update — World Discovery Engine (WDE)
+        Focus on **measurable** improvements (runtime, memory, I/O, GPU/CPU utilization) with:
+        - Reproducibility and rollback paths
+        - No silent config drift (all tunables remain in `configs/*.yaml`)
+        - Ethics & sovereignty banners unchanged for public artifacts
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale & Expected Impact
+      description: What bottleneck are you addressing and why now?
+      placeholder: "Cache hillshade tiles; vectorize NDVI; add batched tile inference; pin GDAL; quantize VLM embeddings; parallelize detect()..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope of Change
+      description: List touched modules/paths and whether this is code-only, infra-only, or both.
+      placeholder: |
+        - world_engine/detect.py (batched CV ops)
+        - world_engine/evaluate.py (memoized NDVI window)
+        - Dockerfile (add GDAL build arg cache)
+        - .github/workflows/ci.yml (matrix shrink)
+    validations:
+      required: true
+
+  - type: textarea
+    id: technique
+    attributes:
+      label: Technique(s)
+      description: Specify concrete optimization(s) applied.
+      placeholder: |
+        - Caching: tile-level hillshade cache keyed by AOI+params
+        - Vectorization: replace Python loops with NumPy ops
+        - Batch/Parallel: multiprocessing over tiles; threadpool for I/O
+        - Quantization / mixed precision (if applicable)
+        - ONNX/TensorRT export for model inference (if applicable)
+    validations:
+      required: true
+
+  - type: textarea
+    id: benchmarks
+    attributes:
+      label: Benchmarks (Before → After)
+      description: Provide numbers and how you measured (hardware, dataset slice, seed).
+      placeholder: |
+        **Sample AOI (4 tiles)**
+        - Runtime: 11m12s → 8m58s (-19.8%)
+        - Peak RAM: 6.1 GB → 4.7 GB (-23%)
+        - GPU mem (if used): 5.3 GB → 3.9 GB
+        - CI `ci.yml`: 6m31s → 5m12s
+        Method: pytest -k perf; seeds fixed (np/py/torch=42), same Docker image/hash
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducibility
+    attributes:
+      label: Reproducibility & Controls
+      description: Show that seeds, environments, and data versions are pinned; no “magic numbers”.
+      placeholder: |
+        - Seeds: numpy/random/torch set + logged
+        - Env: Docker image digest pinned; Poetry.lock unchanged
+        - Data: DVC stage hashes stable; Kaggle notebook runs end-to-end
+        - Tunables: in `configs/*.yaml` only (no hard-coded thresholds)
+    validations:
+      required: true
+
+  - type: textarea
+    id: datasets
+    attributes:
+      label: Dataset/CRS/Resolution Notes
+      description: Any change to inputs, CRS, or grid resolution that could alter metrics?
+      placeholder: "No changes; EPSG:4326 retained; tile grid unchanged."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ethics
+    attributes:
+      label: Ethics & Safety
+      options:
+        - label: Coordinate masking and sovereignty banners remain active in reports
+          required: true
+        - label: No changes that weaken CARE-aligned defaults or disclosure rules
+          required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: Link/describe unit + integration tests added/updated; include CI status.
+      placeholder: |
+        - Added `tests/perf/test_batch_detect.py`
+        - Updated `tests/integration/test_notebook_run.py` asserts on wall time & RAM
+        - GitHub Actions: `ci.yml` green on py3.11, ubuntu-latest
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Plan
+      description: Exact steps to revert if regressions occur.
+      placeholder: |
+        - Revert to tag `vX.Y-perf-prev`
+        - `dvc checkout && dvc repro`
+        - Rerun perf suite; restore Docker image digest; confirm Kaggle E2E pass
+    validations:
+      required: true
