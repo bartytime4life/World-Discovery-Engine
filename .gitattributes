@@ -1,17 +1,154 @@
 # FILE: .gitattributes
 # -------------------------------------------------------------------------------------------------
-# Normalize line endings
+# 🌍 World Discovery Engine (WDE) — Git Attributes
+#
+# Goals
+#  - Clean diffs and consistent line-endings across platforms
+#  - Smarter diffs for notebooks (via nbdime) and geospatial artifacts
+#  - Mark heavy/binary & generated files to keep reviews and linguist stats sane
+#  - NOTE: GitHub already honors `.git-blame-ignore-revs` at repo root for blame view.
+#          No attributes mapping is required for blame. Keep that file updated.
+# -------------------------------------------------------------------------------------------------
+
+# ----------------------------
+# Text normalization
+# ----------------------------
 * text=auto eol=lf
 
-# Treat notebooks as text (better diffs with nbstripout applied by pre-commit)
-*.ipynb filter=clean_ipynb
+# Shell/CI scripts — always LF
+*.sh   text eol=lf
+*.bash text eol=lf
+*.zsh  text eol=lf
+*.env  text eol=lf
+Makefile text eol=lf
 
-# Mark binary geospatial assets to avoid diff bloat
-*.tif binary
+# Windows batch (if any) — CRLF on checkout (optional; safe to leave LF too)
+#*.bat text eol=crlf
+#*.cmd text eol=crlf
+
+# ----------------------------
+# Notebooks (prefer nbdime)
+# ----------------------------
+# Use nbdime for meaningful JSON-aware notebook diffs:
+#   pip install nbdime && nbdime config-git --enable
+# This sets the "ipynb" diff driver in your global gitconfig.
+*.ipynb diff=ipynb
+
+# If nbdime is not available, GitHub still renders notebook diffs, but local diffs will be noisy.
+
+# ----------------------------
+# Geospatial & data binaries
+# ----------------------------
+# Rasters
+*.tif  binary
 *.tiff binary
-*.jp2 binary
-*.laz binary
-*.las binary
-*.zip binary
-*.7z binary
-*.tar.gz binary
+*.img  binary
+*.vrt  text  linguist-generated=true  # VRT is XML; mark as generated
+
+# Point clouds
+*.las  binary
+*.laz  binary
+
+# Vectors & packages
+*.gpkg    binary
+*.gdb/**  binary
+*.shp     binary
+*.shx     binary
+*.dbf     binary
+*.prj     text
+*.cpg     text
+*.qmd     text
+
+# Sidecars / overviews
+*.aux.xml text linguist-generated=true
+*.ovr     binary linguist-generated=true
+*.tfw     text
+*.wld     text
+*.worldfile text
+*.sidecar  text
+
+# Tabular / columnar
+*.parquet     binary
+*.feather     binary
+*.orc         binary
+*.arrow       binary
+
+# Archives / bundles
+*.zip  binary
+*.tar  binary
+*.tgz  binary
+*.7z   binary
+
+# Images / media
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.svg  text
+
+# Documents
+*.pdf  binary
+
+# ----------------------------
+# Code & configs
+# ----------------------------
+*.py     text
+*.toml   text
+*.yaml   text
+*.yml    text
+*.json   text
+*.md     text
+*.rst    text
+*.ini    text
+*.cfg    text
+*.sql    text
+*.csv    text eol=lf
+*.tsv    text eol=lf
+
+# Lockfiles are large but text; keep in reviews but mark as generated for linguist stats
+poetry.lock              text linguist-generated=true
+Pipfile.lock             text linguist-generated=true
+package-lock.json        text linguist-generated=true
+yarn.lock                text linguist-generated=true
+requirements*.txt        text
+.dvc/*.lock              text linguist-generated=true
+
+# ----------------------------
+# DVC & build artifacts visibility
+# ----------------------------
+# Treat DVC metadata as text but exclude from linguist language stats
+.dvc/**                 text linguist-generated=true
+# Cache/temp are ignored via .gitignore; attributes here affect stats & diffs only.
+
+# ----------------------------
+# CI / GitHub metadata
+# ----------------------------
+.github/**              text
+.github/**/*.yml        text
+.gitattributes          text
+.git-blame-ignore-revs  text
+
+# ----------------------------
+# Notebook checkpoints & transient files
+# ----------------------------
+*.ipynb_checkpoints/**  linguist-generated=true
+*.nbconvert.ipynb       linguist-generated=true
+*.ipynb_diff            linguist-generated=true
+
+# ----------------------------
+# Optional: Git LFS hints (commented)
+# ----------------------------
+# If you enable Git LFS for heavy artifacts, uncomment patterns below and run:
+#   git lfs install && git lfs track "<pattern>"
+#*.tif  filter=lfs diff=lfs merge=lfs -text
+#*.laz  filter=lfs diff=lfs merge=lfs -text
+#*.parquet filter=lfs diff=lfs merge=lfs -text
+#*.zip  filter=lfs diff=lfs merge=lfs -text
+
+# ----------------------------
+# Safety notes
+# ----------------------------
+# • Do NOT mark code as binary; you’ll lose diffs and reviews.
+# • Avoid custom merge strategies for lock files unless you’re sure; prefer normal conflict resolution.
+# • Keep `.git-blame-ignore-revs` updated for mass-reformat commits; GitHub will respect it automatically.
