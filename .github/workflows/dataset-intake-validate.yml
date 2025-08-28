@@ -1,74 +1,232 @@
-name: Validate New Dataset Issues
+name: Validate New Dataset Issues — Ultimate
 
 on:
   issues:
     types: [opened, edited]
+  issue_comment:
+    types: [created]
+  workflow_dispatch: {}
+
+concurrency:
+  group: dataset-issue-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
-  issues: write
   contents: read
+  issues: write
+
+env:
+  # Accepted license slugs (extend as needed)
+  LICENSE_ALLOWLIST: >-
+    cc-by|cc-by-4\.0|cc-by-sa|cc0|odc-by|odc-odbl|odbl|mit|apache-2\.0|bsd-3-clause|bsd-2-clause|gpl-3\.0|lgpl-3\.0
+  # Words that often indicate risk or non-open terms; we will warn (not hard-fail)
+  LICENSE_WARNLIST: >-
+    restricted|no redistribution|non-commercial|nc|personal use|nda|proprietary|internal only
+  # Minimal sections expected in the issue body (case-insensitive)
+  REQUIRED_FIELDS: >-
+    Source URL|License|Spatial & Temporal Coverage|Formats & Access|Required Preprocessing|Proposed DVC Path|Ethics & Safety
+  # Optional: auto-assign and auto-label
+  DATASET_LABELS: "datasets,triage:dataset"
+  NEEDS_INFO_LABEL: "needs-info"
+  ASSIGNEES: ""             # e.g. "data-steward-1,data-steward-2"
+  TEAM_REVIEWERS: ""        # org team slug(s), comma-separated, e.g. "data-stewards"
 
 jobs:
   lint-dataset-issue:
-    if: contains(github.event.issue.title, '[dataset]')
+    name: Lint New Dataset Issue
     runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'issues' && contains(github.event.issue.title, '[dataset]')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/recheck-dataset') && contains(github.event.issue.title, '[dataset]'))
     steps:
-      - name: Extract issue body
-        id: body
-        run: |
-          printf "BODY<<'EOF'\n%s\nEOF\n" "${{ github.event.issue.body }}" >> $GITHUB_OUTPUT
+      - name: Extract issue context
+        id: ctx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isIssueEvent = context.eventName === 'issues';
+            const issue = isIssueEvent ? context.payload.issue : context.payload.issue;
+            core.setOutput('number', issue.number);
+            core.setOutput('title', issue.title || '');
+            core.setOutput('body',  issue.body  || '');
 
-      - name: Basic field validation
+      - name: Basic field validation (JS)
         id: validate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `${{ steps.ctx.outputs.body }}` || '';
+            const title = `${{ steps.ctx.outputs.title }}` || '';
+
+            const required = (process.env.REQUIRED_FIELDS || '').split('|').map(s => s.trim()).filter(Boolean);
+            const missing = [];
+            for (const key of required) {
+              const rx = new RegExp(key.replace(/\s+/g, '\\s*'), 'i');
+              if (!rx.test(body)) missing.push(key);
+            }
+
+            // Extract first URL-like tokens (very permissive)
+            const urlRx = /\bhttps?:\/\/[^\s)]+/ig;
+            const urls = body.match(urlRx) || [];
+
+            // License detection
+            const rawLic = (body.match(/(?:^|\n)\s*license[^:]*:\s*(.+)$/i)?.[1] || body.match(/license\s*&\s*terms\s*([^#\n]+)/i)?.[1] || '').trim();
+            const licenseLine = rawLic.replace(/[`*_>]/g, '').toLowerCase();
+
+            const licenseAllow = new RegExp(`\\b(${process.env.LICENSE_ALLOWLIST})\\b`, 'i');
+            const licenseWarn  = new RegExp(`\\b(${process.env.LICENSE_WARNLIST})\\b`,  'i');
+
+            let licenseStatus = 'unknown';
+            if (licenseAllow.test(licenseLine)) licenseStatus = 'allowed';
+            else if (licenseWarn.test(licenseLine)) licenseStatus = 'warn';
+
+            core.setOutput('missing', JSON.stringify(missing));
+            core.setOutput('urls', JSON.stringify(urls));
+            core.setOutput('licenseStatus', licenseStatus);
+            core.setOutput('licenseLine', licenseLine);
+
+            if (missing.length) {
+              core.setFailed(`Missing required fields: ${missing.join(', ')}`);
+            }
+
+      - name: URL reachability probe (best-effort HEAD)
+        id: probe
+        if: success()
+        shell: bash
         run: |
-          BODY="${{ steps.body.outputs.BODY }}"
+          set -euo pipefail
+          echo '${{ steps.validate.outputs.urls }}' | jq -r '.[]' | head -n 5 | while read -r url; do
+            echo "::group::Probing $url"
+            curl -sSIL --max-time 15 "$url" | sed 's/^/  /'
+            echo "::endgroup::"
+          done || true
 
-          missing=()
+      - name: Add default dataset labels & assign (best-effort)
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = (process.env.DATASET_LABELS || '').split(',').map(x => x.trim()).filter(Boolean);
+            if (labels.length) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number('${{ steps.ctx.outputs.number }}'),
+                  labels
+                });
+              } catch (e) { core.warning(`Add labels failed: ${e.message}`); }
+            }
+            const assignees = (process.env.ASSIGNEES || '').split(',').map(x => x.trim()).filter(Boolean);
+            if (assignees.length) {
+              try {
+                await github.rest.issues.addAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number('${{ steps.ctx.outputs.number }}'),
+                  assignees
+                });
+              } catch (e) { core.warning(`Assign failed: ${e.message}`); }
+            }
 
-          # Minimal checks for the New Dataset Intake template fields
-          grep -qi 'source url' <<<"$BODY" || missing+=("Source URL / API endpoint")
-          grep -qi 'license'    <<<"$BODY" || missing+=("License & Terms")
-          grep -qi 'spatial & temporal coverage' <<<"$BODY" || missing+=("Spatial & Temporal Coverage")
-          grep -qi 'formats & access' <<<"$BODY" || missing+=("Formats & Access")
-          grep -qi 'preprocessing'    <<<"$BODY" || missing+=("Required Preprocessing / Transforms")
-          grep -qi 'proposed dvc path' <<<"$BODY" || missing+=("Proposed DVC Path")
-          grep -qi 'ethics & safety'   <<<"$BODY" || missing+=("Ethics & Safety")
-
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "MISSING<<EOF" >> $GITHUB_OUTPUT
-            printf "%s\n" "${missing[@]}" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-      - name: Comment success
+      - name: Comment success (structure OK)
         if: success()
         uses: actions/github-script@v7
         with:
           script: |
+            const licStatus = `${{ steps.validate.outputs.licenseStatus }}`;
+            let licenseNote = 'License: _unspecified or unrecognized_';
+            if (licStatus === 'allowed') licenseNote = 'License: ✅ appears compatible with open/reproducible use';
+            if (licStatus === 'warn')    licenseNote = 'License: ⚠️ contains terms that may restrict use (please double-check)';
+
             const body = `✅ Thanks! Your dataset issue contains the required sections.
-- Our team will now review license compatibility, ethics, and reproducibility.
-- If you have a minimal code example for a 1-tile AOI clip, please add it as a comment (optional).`;
+
+${licenseNote}
+
+**Next steps**
+- A maintainer will review source terms, ethics, and reproducibility.
+- If you can, add a minimal 1-tile AOI clip / sample code as a comment (optional).
+- If the dataset has a STAC catalog, please include the root URL.
+
+_You can re-run validation by commenting \`/recheck-dataset\`._`;
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: Number('${{ steps.ctx.outputs.number }}'),
               body
             });
 
-      - name: Comment missing fields
+      - name: Comment missing fields + label needs-info
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            const missing = `\n${{ steps.validate.outputs.MISSING || 'Unknown fields' }}`;
-            const body = `⚠️ Some required fields appear missing in this dataset issue:
-${missing}
+            const missing = JSON.parse(`${{ steps.validate.outputs.missing || '[]' }}`);
+            const md = missing.length ? `\n- ${missing.join('\n- ')}` : '\n- (unknown)';
+            const body = `⚠️ Some required fields appear missing in this dataset issue:${md}
 
-Please edit the issue to include these sections.`;
-            await github.rest.issues.createComment({
+**Please edit the issue** to include the missing sections:
+
+- Source URL / API endpoint
+- License & Terms
+- Spatial & Temporal Coverage
+- Formats & Access
+- Required Preprocessing / Transforms
+- Proposed DVC Path
+- Ethics & Safety
+
+_You can re-run validation by commenting \`/recheck-dataset\`._`;
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number('${{ steps.ctx.outputs.number }}'),
+                body
+              });
+            } catch (e) { core.warning(`Comment failed: ${e.message}`); }
+
+            const needs = (process.env.NEEDS || '').split(',').map(x => x.trim()).filter(Boolean);
+            const label = process.env.NEEDS || 'needs-info';
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number('${{ steps.ctx.outputs.number }}'),
+                labels: [label]
+              });
+            } catch (e) { core.warning(`Label failed: ${e.message}`); }
+          env:
+            NEEDS: ${{ env.NEEDS_INFO_LABEL }}
+
+      - name: Team review request (optional)
+        if: success() && env.TEAM_REVIEWERS != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const teams = (process.env.TEAMS || '').split(',').map(x => x.trim()).filter(Boolean);
+            for (const t of teams) {
+              try {
+                await github.rest.issues.addAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number('${{ steps.ctx.outputs.number }}'),
+                  assignees: [t]
+                });
+              } catch (e) { core.warning(`Team assign failed: ${e.message}`); }
+            }
+          env:
+            TEAMS: ${{ env.TEAM_REVIEWERS }}
+
+      - name: React to /recheck-dataset
+        if: github.event_name == 'issue_comment' && contains(github.event.comment.body, '/recheck-dataset')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
             });
+            // The whole job reruns because of job-level if condition
