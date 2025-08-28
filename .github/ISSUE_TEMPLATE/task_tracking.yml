@@ -1,0 +1,86 @@
+# .github/ISSUE_TEMPLATE/task_tracking.yml
+name: "📌 Task Tracking"
+description: "For small, shippable tasks with clear acceptance criteria (CLI-first, Hydra-configured, CI-tested)."
+title: "[task] <short, imperative summary>"
+labels:
+  - task
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 📌 Task Tracking — Small, Shippable Unit of Work
+        Each task must be: **CLI-first**, **Hydra-configured**, **DVC-versioned**, and **CI-tested**.
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      placeholder: "Add --no-tsne flag to `spectramind diagnose dashboard`."
+    validations:
+      required: true
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      placeholder: "Speed up diagnostics for quick iterations when t-SNE is not needed."
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: Deliverables
+      description: Concrete outputs (files, CLI flags, docs).
+      placeholder: "- Updated cli_diagnose.py  - Docs in docs/diagnostics.md  - Unit tests in tests/diagnostics/test_cli_diagnose.py"
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Observable, testable criteria for completion.
+      placeholder: "CLI flag appears in `--help`; CI green; dashboard builds without t-SNE; docs updated."
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / Blockers
+      placeholder: "Requires plot_tsne_interactive.py merged; depends on config_v50.yaml update."
+    validations:
+      required: false
+
+  - type: input
+    id: estimate
+    attributes:
+      label: Estimate
+      placeholder: "4h"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: CLI-first design (Typer entrypoint)
+        - label: Hydra config / overrides wired
+        - label: Unit/integration tests added or updated
+        - label: DVC/artifacts updated if applicable
+        - label: Docs and changelog updated
+        - label: CI green
+    validations:
+      required: false
+
+  - type: textarea
+    id: links
+    attributes:
+      label: Links / Artifacts
+      placeholder: "- Related issues/PRs: …  - CI run: …  - Demo screenshots: …"
+    validations:
+      required: false
