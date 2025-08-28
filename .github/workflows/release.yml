@@ -1,12 +1,11 @@
-```yaml
 # .github/workflows/release.yml
 # ==============================================================================
-# World Discovery Engine (WDE) — Ultimate Release Pipeline
+# World Discovery Engine (WDE) — Ultimate Release & Supply-Chain Pipeline
 # - Reproducible bundles: submission.csv, manifest.json, outputs/, reports/
-# - Mini end-to-end pipeline (ingest → detect → evaluate → verify → report)
-# - Ethics guardrail: redact high-precision coordinates from artifacts
-# - Checksums + GitHub Release; optional Docker build & push to GHCR
-# - Caching, concurrency, and hardened defaults
+# - Mini E2E pipeline (ingest → detect → evaluate → verify → report) with coordinate redaction
+# - Version/Tag integrity (tag == pyproject.toml version), changelog, checksums
+# - Python package build (sdist/wheel), SBOM, container build (multi-arch), image scan, optional signing
+# - Caching, concurrency, hardened permissions, OIDC for GHCR
 # ==============================================================================
 
 name: Release
@@ -27,66 +26,215 @@ on:
         default: "true"
         type: choice
         options: ["true", "false"]
-
-permissions:
-  contents: write
-  packages: write
-  actions: read
+      sign_images:
+        description: "Cosign sign container images (requires COSIGN_PRIVATE_KEY or OIDC keyless)?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["true", "false"]
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  packages: write
+  actions: read
+  checks: read
+  statuses: read
+  id-token: write   # OIDC for GHCR / Cosign keyless
+
 env:
   PYTHON_VERSION: "3.11"
   POETRY_VERSION: "1.8.3"
   ARTIFACT_NAME: wde-release-${{ github.ref_name }}
-  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:release-${{ github.ref_name }}
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  IMAGE_TAG: release-${{ github.ref_name }}
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+  # Fail if high-precision coords leak (6+ decimal places)
+  COORD_REGEX: '[+-]?[0-9]{1,3}\.[0-9]{6,}'
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_PYTHON_VERSION_WARNING: "1"
+  UV_SYSTEM_PYTHON: "1"
 
 jobs:
+
+  # ---------------------------------------------------------------------------
+  # job: prepare — Checkout, resolve tag, verify version alignment, build deps
+  # ---------------------------------------------------------------------------
   prepare:
-    name: Prepare & Build Artifacts
+    name: Prepare & Verify
     runs-on: ubuntu-latest
 
     steps:
+      - name: Harden Runner
+        run: |
+          set -euxo pipefail
+          sudo sysctl -w net.ipv4.tcp_syncookies=1
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve Tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements*.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
-
-      - name: Install dependencies (requirements.txt)
-        if: hashFiles('requirements.txt') != ''
+      - name: Install build tooling (uv + twine)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install uv==0.4.10 twine build
 
-      - name: Install Poetry (optional)
-        if: hashFiles('pyproject.toml') != ''
+      - name: Parse version from pyproject.toml
+        id: version
         run: |
-          pip install "poetry==${{ env.POETRY_VERSION }}"
-          poetry install --no-interaction --no-root || true
+          python - <<'PY'
+          import tomllib, pathlib, sys, re
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          ver = data["tool"]["poetry"]["version"]
+          print(f"::echo::on")
+          print(f"Detected version: {ver}")
+          print(f"::echo::off")
+          print(f"value={ver}")
+          PY
+        shell: bash
 
-      # --- Mini end-to-end (mirrors WDE Discovery Funnel) ---------------------
+      - name: Verify tag matches version (v* == pyproject version)
+        run: |
+          set -euxo pipefail
+          TAG="${{ steps.tag.outputs.value }}"
+          VER="${{ steps.version.outputs.value }}"
+          if [ "v${VER}" != "${TAG}" ]; then
+            echo "Tag ${TAG} does not match pyproject version v${VER}" >&2
+            exit 1
+          fi
+
+      - name: Cache .venv (uv)
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements*.txt') }}
+
+      - name: Install dependencies (fast path using uv, fallback to pip)
+        run: |
+          set -euxo pipefail
+          if [ -f pyproject.toml ]; then
+            uv pip install -e . || uv pip install -r requirements.txt || pip install -r requirements.txt
+          elif [ -f requirements.txt ]; then
+            uv pip install -r requirements.txt || pip install -r requirements.txt
+          fi
+
+      - name: Record environment snapshot
+        run: |
+          mkdir -p build_meta
+          python -V | tee build_meta/python.txt
+          pip freeze | tee build_meta/pip-freeze.txt
+          echo "${{ github.sha }}" > build_meta/git_sha.txt
+          echo "${{ steps.tag.outputs.value }}" > build_meta/tag.txt
+
+      - name: Upload build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-meta
+          path: build_meta/
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # job: test — optional smoke tests / unit tests on tagged release
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test (Unit & Smoke)
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-meta
+          path: build_meta
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f pyproject.toml ]; then
+            pip install . || true
+          fi
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt || true
+          fi
+          pip install pytest pytest-cov
+
+      - name: Run tests
+        run: |
+          set -eux
+          if [ -d tests ]; then
+            pytest -q --maxfail=1 --disable-warnings
+          else
+            echo "No tests/ directory; skipping."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # job: mini-pipeline — run miniature WDE pipeline, redact, package bundle
+  # ---------------------------------------------------------------------------
+  mini-pipeline:
+    name: Build Artifacts (Mini E2E + Redaction + Bundle)
+    runs-on: ubuntu-latest
+    needs: [prepare, test]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Install runtime deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f pyproject.toml ]; then pip install . || true; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
+
       - name: Seed & runtime info
         run: |
           python - <<'PY'
-          import os, sys, random, numpy as np
+          import os, sys, random, time, json, numpy as np, platform
           np.random.seed(42); random.seed(42)
-          print("Python:", sys.version)
-          print("CWD:", os.getcwd())
+          meta = {
+            "python": sys.version,
+            "platform": platform.platform(),
+            "time": time.time(),
+            "sha": os.getenv("GITHUB_SHA"),
+            "tag": os.getenv("GITHUB_REF_NAME"),
+          }
+          print(json.dumps(meta, indent=2))
           PY
 
       - name: Run miniature pipeline (ingest → detect → evaluate → verify → report)
@@ -95,36 +243,33 @@ jobs:
           set -euxo pipefail
           mkdir -p outputs reports
           if python -c "import world_engine, sys; sys.exit(0)"; then
-            # Prefer unified CLI if available; keep each stage tolerant (|| true) to allow release bundling.
-            python -m world_engine.cli ingest  --config configs/default.yaml || true
-            python -m world_engine.cli detect  --config configs/default.yaml || true
-            python -m world_engine.cli evaluate --config configs/default.yaml || true
-            python -m world_engine.cli verify   --config configs/default.yaml || true
-            python -m world_engine.cli report   --config configs/default.yaml --outdir outputs || true
+            (python -m world_engine.cli ingest  --config configs/default.yaml || true)
+            (python -m world_engine.cli detect  --config configs/default.yaml || true)
+            (python -m world_engine.cli evaluate --config configs/default.yaml || true)
+            (python -m world_engine.cli verify   --config configs/default.yaml || true)
+            (python -m world_engine.cli report   --config configs/default.yaml --outdir outputs || true)
           else
-            # Fallback: generate minimal artifacts for release completeness
             python - <<'PY'
             import json, pathlib, time
             pathlib.Path("outputs").mkdir(exist_ok=True)
             pathlib.Path("reports").mkdir(exist_ok=True)
-            (pathlib.Path("submission.csv")).write_text("id,prediction\nsample,0.5\n")
-            (pathlib.Path("manifest.json")).write_text(json.dumps({"run":"mini","timestamp":time.time()}, indent=2))
+            pathlib.Path("submission.csv").write_text("id,prediction\nsample,0.5\n")
+            pathlib.Path("manifest.json").write_text(json.dumps({"run":"mini","timestamp":time.time()}, indent=2))
             (pathlib.Path("outputs")/"candidate_dossier_SAMPLE.md").write_text("# Candidate SAMPLE\n- demo dossier\n")
             PY
           fi
 
-      # --- Ethics/Sovereignty guardrail: block high-precision coordinate leakage ---
-      - name: Redaction guard (coordinates)
+      - name: Ethics/Sovereignty guard — redact high-precision coordinates
         shell: bash
         run: |
           set -euxo pipefail
-          shopt -s globstar || true
-          if grep -RIEn '[+-]?[0-9]{1,3}\.[0-9]{6,}' outputs reports || true; then
+          shopt -s globstar nullglob
+          if grep -RIEn "${{ env.COORD_REGEX }}" outputs reports | tee /dev/stderr; then
             echo "High-precision coordinates found; redact/round coordinates before releasing." >&2
             exit 1
           fi
 
-      - name: Collect & package release bundle
+      - name: Build release bundle
         run: |
           set -euxo pipefail
           mkdir -p release_bundle
@@ -142,17 +287,58 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  docker:
-    name: Build & Push Docker (optional)
+  # ---------------------------------------------------------------------------
+  # job: build-pkg — build sdist/wheel, create SBOM, upload artifacts
+  # ---------------------------------------------------------------------------
+  build-pkg:
+    name: Build Python Package (sdist/wheel + SBOM)
     runs-on: ubuntu-latest
-    needs: prepare
+    needs: [prepare, test]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Build package (PEP 517)
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          ls -la dist
+
+      - name: Generate SBOM (CycloneDX for Python)
+        run: |
+          python -m pip install cyclonedx-bom==4.3.6
+          cyclonedx-py -o sbom-python.xml
+
+      - name: Upload dist + SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-sdist-wheel
+          path: |
+            dist/**
+            sbom-python.xml
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # job: docker — optional multi-arch image build, scan, SBOM, optional sign
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Build & Push Docker (multi-arch, scan, SBOM)
+    runs-on: ubuntu-latest
+    needs: [mini-pipeline]
     if: |
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.build_docker == 'true')
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -171,38 +357,89 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.DOCKER_IMAGE }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag
-            type=ref,event=branch
+            type=raw,value=${{ env.IMAGE_TAG }}
             type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=World Discovery Engine
+            org.opencontainers.image.description=Multi-modal AI pipeline for archaeology & earth systems
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
 
       - name: Build & Push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          platforms: ${{ env.DOCKER_PLATFORMS }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
-          sbom: false
+          provenance: mode=max
+          sbom: true
           build-args: |
             PYTHON_VERSION=${{ env.PYTHON_VERSION }}
 
+      - name: Scan image with Trivy (CRITICAL/HIGH fail)
+        uses: aquasecurity/trivy-action@0.22.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Export SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: cyclonedx-json
+          artifact-name: "sbom-image-${{ env.IMAGE_TAG }}.json"
+
+      - name: Cosign sign image (optional)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_images == 'true' }}
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euxo pipefail
+          pipx install cosign==2.2.3 || pip install cosign==2.2.3
+          # Keyless OIDC signing:
+          cosign sign --yes "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          cosign sign --yes "${{ env.IMAGE_NAME }}:latest"
+
+  # ---------------------------------------------------------------------------
+  # job: release — checksums, GH Release (bundle, pkg, SBOMs)
+  # ---------------------------------------------------------------------------
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [prepare]
+    needs: [mini-pipeline, build-pkg]
+    permissions:
+      contents: write
 
     steps:
-      - name: Download artifact
+      - name: Download release bundle
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
+          path: dl
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: pkg-sdist-wheel
+          path: dl/dist
 
       - name: Compute checksums
+        working-directory: dl
         run: |
-          sha256sum ${{ env.ARTIFACT_NAME }}.tar.gz | tee SHA256SUMS.txt
+          sha256sum ${{ env.ARTIFACT_NAME }}.tar.gz > SHA256SUMS.txt
+          if compgen -G "dist/*" > /dev/null; then
+            sha256sum dist/* >> SHA256SUMS.txt
+          fi
+          cat SHA256SUMS.txt
 
       - name: Resolve tag
         id: tag
@@ -213,16 +450,33 @@ jobs:
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create Release
+      - name: Generate release notes (auto)
+        id: notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.tag.outputs.value }}';
+            const repo = context.repo.repo;
+            const owner = context.repo.owner;
+            const { data } = await github.request('GET /repos/{owner}/{repo}/releases/generate-notes', {
+              owner, repo,
+              tag_name: tag,
+              target_commitish: context.sha
+            });
+            core.setOutput('body', data.body || '');
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.value }}
           name: ${{ steps.tag.outputs.value }}
           draft: false
           prerelease: false
+          generate_release_notes: false
+          body: ${{ steps.notes.outputs.body }}
           files: |
-            ${{ env.ARTIFACT_NAME }}.tar.gz
-            SHA256SUMS.txt
+            dl/${{ env.ARTIFACT_NAME }}.tar.gz
+            dl/SHA256SUMS.txt
+            dl/dist/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
