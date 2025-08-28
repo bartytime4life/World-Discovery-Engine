@@ -1,6 +1,6 @@
 # FILE: Makefile
 # -------------------------------------------------------------------------------------------------
-# World Discovery Engine (WDE) — Project Makefile (Upgraded)
+# 🌍 World Discovery Engine (WDE) — Project Makefile (Ultimate)
 #
 # Goals:
 #  - One-command setup with Poetry + pre-commit
@@ -9,6 +9,7 @@
 #  - DVC orchestration, Kaggle-friendly lock exports, optional nb execution
 #  - Ethics guardrails hook + supply-chain hygiene (lint/fmt/audit)
 #  - Clean packaging with optional artifact inclusion
+#  - Docker: prod vs dev profiles using .dockerignore / .dockerignore-light
 #
 # Usage:
 #   make help
@@ -20,6 +21,8 @@
 #   make lint fmt test ci audit  # hygiene & tests
 #   make manifest         # write artifacts/metrics/run_manifest.json
 #   make package          # tarball of results & docs under artifacts/
+#   make docker-build-prod|dev   # build images (prod uses .dockerignore; dev keeps tests/docs)
+#   make docker-run-prod|dev     # run images (dev bind-mounts repo)
 # -------------------------------------------------------------------------------------------------
 
 SHELL      := /bin/bash -eo pipefail
@@ -48,6 +51,10 @@ SEED_TORCH  ?= 42
 # Optional AOI bbox for manifest (min_lat,min_lon,max_lat,max_lon)
 WDE_AOI_BBOX ?= -3.5,-60.5,-3.4,-60.4
 
+# Docker
+DOCKER_IMAGE ?= wde
+DOCKER_TAG   ?= latest
+
 # Color helpers
 C_GREEN := \033[32m
 C_BLUE  := \033[34m
@@ -61,6 +68,7 @@ C_RST   := \033[0m
         dvc-repro dvc-status data-pull \
         export-locks kaggle-export kaggle-run kaggle-zip \
         manifest ethics-check package \
+        docker-build-prod docker-build-dev docker-run-prod docker-run-dev docker-clean \
         clean clean-artifacts clean-dvc version hash
 
 # ---------- Help ----------
@@ -91,6 +99,11 @@ help:
 	@echo "  package         : Tarball of results & docs under artifacts/"
 	@echo "  version         : Print version metadata"
 	@echo "  hash            : Print run/config hashes"
+	@echo "  docker-build-prod : Build lean prod image (.dockerignore)"
+	@echo "  docker-build-dev  : Build dev image (.dockerignore-light; keeps tests/docs/notebooks)"
+	@echo "  docker-run-prod   : Shell into prod image"
+	@echo "  docker-run-dev    : Shell into dev image (bind-mount repo)"
+	@echo "  docker-clean      : Prune dangling Docker images"
 	@echo "  clean           : Remove caches/__pycache__/logs"
 	@echo "  clean-artifacts : Remove artifacts/"
 	@echo "  clean-dvc       : Remove DVC caches/locks (careful)"
@@ -256,6 +269,40 @@ package:
 	  tar -rzf $(ARTIFACTS)/wde_$(DATE)_bundle.tgz artifacts/verified 2>/dev/null || true; \
 	fi
 	@echo "$(C_GREEN)[WDE] Package: $(ARTIFACTS)/wde_$(DATE)_bundle.tgz$(C_RST)"
+
+# ---------- Docker (prod vs dev) ----------
+docker-build-prod:
+	@echo "$(C_BLUE)[WDE] Building production Docker image (.dockerignore)$(C_RST)"
+	@test -f Dockerfile || (echo "$(C_RED)Missing Dockerfile$(C_RST)"; exit 1)
+	docker build \
+		--file Dockerfile \
+		--tag $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		--ignore-file .dockerignore \
+		.
+
+docker-build-dev:
+	@echo "$(C_BLUE)[WDE] Building development Docker image (.dockerignore-light)$(C_RST)"
+	@test -f Dockerfile.dev || (echo "$(C_YELL)Dockerfile.dev not found — using Dockerfile$(C_RST)"; \
+	 touch Dockerfile.dev; echo 'FROM $(DOCKER_IMAGE):$(DOCKER_TAG)' > Dockerfile.dev )
+	@test -f .dockerignore-light || (echo "$(C_YELL).dockerignore-light not found — falling back to .dockerignore$(C_RST)"; \
+	 cp .dockerignore .dockerignore-light )
+	docker build \
+		--file Dockerfile.dev \
+		--tag $(DOCKER_IMAGE):dev \
+		--ignore-file .dockerignore-light \
+		.
+
+docker-run-prod:
+	@echo "$(C_BLUE)[WDE] Running production container$(C_RST)"
+	docker run --rm -it $(DOCKER_IMAGE):$(DOCKER_TAG) bash
+
+docker-run-dev:
+	@echo "$(C_BLUE)[WDE] Running development container (bind-mount repo)$(C_RST)"
+	docker run --rm -it -v $$(pwd):/app $(DOCKER_IMAGE):dev bash
+
+docker-clean:
+	@echo "$(C_BLUE)[WDE] Pruning dangling Docker images$(C_RST)"
+	docker image prune -f
 
 # ---------- Metadata ----------
 version:
