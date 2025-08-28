@@ -1,0 +1,103 @@
+# configs/pipeline.yaml
+# ==============================================================================
+# World Discovery Engine (WDE) — Pipeline Configuration
+# ------------------------------------------------------------------------------
+# This file defines the discovery funnel parameters and runtime options.
+# All values are read by the CLI and notebooks, so nothing is hard-coded.
+# ==============================================================================
+
+# ----------------------------------------------------------------------
+# General run settings
+# ----------------------------------------------------------------------
+run:
+  profile: "default"        # profile name (default, kaggle, offline, etc.)
+  random_seed: 42           # fixed seed for reproducibility
+  use_gpu: true             # set false for CPU-only runs
+  num_workers: 4            # dataloader/processing workers
+  output_dir: "outputs/"    # base output directory
+
+# ----------------------------------------------------------------------
+# Area of Interest (AOI) configuration
+# ----------------------------------------------------------------------
+aoi:
+  # bounding box: (min_lat, min_lon, max_lat, max_lon)
+  bbox: [-3.5, -60.5, -3.4, -60.4]
+  tile_size_deg: 0.05     # ~5 km tiles (as per architecture spec:contentReference[oaicite:2]{index=2})
+
+# ----------------------------------------------------------------------
+# Pipeline stages (discovery funnel)
+# ----------------------------------------------------------------------
+pipeline:
+  ingest:
+    enabled: true
+    cache_dir: "data/cache/"
+    reprojection: "EPSG:4326"
+    normalize: true
+  detect:
+    enabled: true
+    methods:
+      edges: { enabled: true, canny_threshold1: 50, canny_threshold2: 150 }
+      hough: { enabled: true, min_line_length: 50 }
+      texture: { enabled: true, glcm: true, lbp: false }
+      vlm_caption: { enabled: true, model: "clip" }  # vision-language captions:contentReference[oaicite:3]{index=3}
+    anomaly_threshold: 0.7
+  evaluate:
+    enabled: true
+    ndvi_timeseries:
+      enabled: true
+      source: "sentinel2"
+      dry_months: [7, 8, 9]
+      min_length_years: 2
+    hydro_geomorph:
+      enabled: true
+      require_near_water_km: 6
+    lidar:
+      enabled: false     # optional (GEDI/OpenTopography):contentReference[oaicite:4]{index=4}
+  verify:
+    enabled: true
+    multiproof_required: 2     # require ≥2 modalities:contentReference[oaicite:5]{index=5}
+    ade_fingerprints:
+      enabled: true
+      soil_p_threshold: 800     # ppm phosphorus threshold:contentReference[oaicite:6]{index=6}
+      dry_season_ndvi_peaks: true
+      floristic_signatures: true
+      geomorph_mound: true
+    causal_graph:
+      enabled: true
+      method: "fci"             # Fast Causal Inference:contentReference[oaicite:7]{index=7}
+    uncertainty:
+      enabled: true
+      method: "bayesian_gnn"    # B-GNN uncertainty histograms:contentReference[oaicite:8]{index=8}
+    ssim_counterfactual:
+      enabled: true             # SSIM what-if test:contentReference[oaicite:9]{index=9}
+  report:
+    enabled: true
+    format: "pdf"
+    include:
+      maps: true
+      ndvi_plots: true
+      soil_maps: true
+      landcover: true
+      sar: true
+      pag_graph: true
+      uncertainty: true
+      ssim: true
+      narrative: true
+    redact_sensitive_coords: true   # ethics compliance:contentReference[oaicite:10]{index=10}
+
+# ----------------------------------------------------------------------
+# Logging and diagnostics
+# ----------------------------------------------------------------------
+logging:
+  level: "INFO"
+  file: "logs/pipeline.log"
+  to_file: true
+  metrics_json: "outputs/diagnostics.json"
+
+# ----------------------------------------------------------------------
+# Ethics & compliance
+# ----------------------------------------------------------------------
+ethics:
+  enable_sovereignty_checks: true   # check against Indigenous land boundaries:contentReference[oaicite:11]{index=11}
+  mask_coords: true                 # mask/move site coordinates unless authorized
+  show_warnings: true
