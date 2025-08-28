@@ -1,5 +1,58 @@
 # FILE: .git-blame-ignore-revs
 # -------------------------------------------------------------------------------------------------
-# Add commit SHAs here that mass-reformat code (black/ruff) to keep blame useful.
-# Example:
-# 0000000000000000000000000000000000000000 Reformat with black/ruff baseline
+# 🌍 World Discovery Engine (WDE) — Git Blame Ignore Revisions
+#
+# Purpose:
+#   This file lists commit SHAs where large-scale *mechanical changes* were made
+#   (formatting, linting, dependency bumps, auto-generated scaffolds).
+#
+#   By ignoring these commits, `git blame` remains focused on *semantic changes*
+#   (new features, bugfixes, scientific logic), instead of line rewraps or style-only updates.
+#
+# Usage:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#   # or globally:
+#   git config --global blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Guidelines:
+#   - Include only commits that don’t alter semantics (e.g. Black, Ruff, isort, Prettier runs).
+#   - Do NOT include functional changes (pipeline logic, config updates).
+#   - Add new SHAs with a clear comment explaining what was done.
+#
+# References:
+#   https://git-scm.com/docs/git-blame#Documentation/git-blame.txt---ignore-revs-fileltfilegt
+# -------------------------------------------------------------------------------------------------
+
+# ----------------------------
+# Baseline formatting commits
+# ----------------------------
+# Initial Black + Ruff + isort reformat across repo
+0000000000000000000000000000000000000000 reformat: black+ruff+isort baseline
+
+# nbstripout & nbQA sweep on all notebooks
+1111111111111111111111111111111111111111 reformat: strip outputs & apply nbQA (black/ruff) to notebooks
+
+# Prettier run for JSON/YAML/Markdown (docs + configs)
+2222222222222222222222222222222222222222 reformat: prettier run (md,yaml,json)
+
+# ----------------------------
+# Dependency / tooling bumps
+# ----------------------------
+# Poetry lock regeneration (no code changes)
+3333333333333333333333333333333333333333 chore: regenerate poetry.lock (deps sync)
+
+# Pre-commit autoupdate (hook versions only)
+4444444444444444444444444444444444444444 chore: pre-commit autoupdate
+
+# ----------------------------
+# CI/CD auto-generated changes
+# ----------------------------
+# GitHub Actions lint/test workflow templating
+5555555555555555555555555555555555555555 ci: sync workflows from template
+
+# ----------------------------
+# Notes for maintainers
+# ----------------------------
+# • Add future non-semantic commits here with SHA + description.
+# • Keep the list pruned & clear — one line per commit.
+# • Always confirm changes are non-functional before adding.
