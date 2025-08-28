@@ -1,0 +1,32 @@
+# Lightweight deps for Kaggle runtime (aim: fast installs, no compilers)
+# Core utility
+typer[all]>=0.12.5,<0.13.0
+rich>=13.7,<14.0
+tqdm>=4.66,<5.0
+python-dotenv>=1.0,<2.0
+
+# --- Geospatial stack (usually missing or outdated on Kaggle) ---
+geopandas>=1.0,<2.0
+rasterio>=1.4,<2.0
+rioxarray>=0.15,<0.16
+shapely>=2.0,<3.0
+pyproj>=3.6,<4.0
+xarray>=2024.6,<2025.0
+folium>=0.17,<0.18
+pystac-client>=0.7,<0.8
+sentinelsat>=1.2,<2.0
+
+# --- CV / ML helpers (kept minimal; PyTorch usually preinstalled on Kaggle) ---
+opencv-python-headless>=4.10,<5.0
+scikit-learn>=1.5,<2.0
+
+# (Optional, enable if you’ll run VLM/CLIP captions in Kaggle)
+# transformers>=4.44,<5.0
+# clip-anytorch>=2.6,<3.0
+
+# --- Visualization niceties (Plotly often present, add if needed) ---
+# plotly>=5.24,<6.0
+
+# --- Keep the heavy/compiled stuff out of the Kaggle fast path ---
+# torch-geometric, pyro-ppl, pymc, networkit, reportlab, dowhy, causal-learn
+# can be installed in a separate cell if you enable those modules.
