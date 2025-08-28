@@ -10,6 +10,7 @@
 #   * SSIM what-if sensitivity
 #   * Candidate dossier files (maps/plots + JSON/GeoJSON indices)
 # - Publishes executed notebook & artifacts for audit/review
+# - Matrix: multiple Python versions and profiles (light/heavy)
 # ==============================================================================
 
 name: Kaggle Notebook CI
@@ -31,6 +32,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11"]
+        profile: ["light", "heavy"]   # light = faster checks; heavy = full, challenge-grade validations
+
+    env:
+      WDE_PROFILE: ${{ matrix.profile }}
+
     steps:
       # ------------------------------------------------------------
       # 1) Checkout repo
@@ -39,13 +49,13 @@ jobs:
         uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 2) Setup Python to mirror Kaggle kernel (3.10+)
-      #    (Notebook uses open-data + fallback demo data when offline)【Kaggle notebooks design】
+      # 2) Setup Python to mirror Kaggle kernel (3.10/3.11)
       # ------------------------------------------------------------
-      - name: Setup Python
+      - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: ${{ matrix.python }}
+          cache: 'pip'
 
       # ------------------------------------------------------------
       # 3) Install dependencies (match runtime used by the notebook & pipeline)
@@ -56,93 +66,124 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install papermill nbconvert jupyter nbformat
-          # Optional extras if present in requirements:
+          # Optional extras if present in requirements (kept here for clarity):
           # pip install rasterio shapely opencv-python-headless torch pyro-ppl torch-geometric
 
       # ------------------------------------------------------------
       # 4) Execute notebook top-to-bottom with papermill
-      #    The notebook is built to run fully offline with open datasets/fallbacks【Kaggle Notebook spec】
+      #    The notebook should accept a parameter RUN_PROFILE to tune light/heavy behavior.
       # ------------------------------------------------------------
-      - name: Execute Kaggle notebook
+      - name: Execute Kaggle notebook (${{ matrix.profile }}, py${{ matrix.python }})
         run: |
           papermill notebooks/ade_discovery_pipeline.ipynb \
-                   notebooks/ade_discovery_pipeline_out.ipynb \
-                   -k python3
+                   notebooks/ade_discovery_pipeline_out_${{ matrix.profile }}_${{ matrix.python }}.ipynb \
+                   -k python3 \
+                   -p RUN_PROFILE "${{ matrix.profile }}"
 
       # ------------------------------------------------------------
       # 5) Validate expected artifact structure from WDE pipeline
-      #    (Repository structure + pipeline contracts)【WDE repo structure】【Architecture spec】
-      #    Required outputs (strict): 
+      #    (Repository structure + pipeline contracts)
+      #    Required outputs (strict base): 
       #      - outputs/candidates.json
       #      - outputs/candidates.geojson
-      #      - outputs/reports/ (candidate dossier files)
-      #      - outputs/pag/ (PAG .gml per candidate)
-      #      - outputs/uncertainty/ (histograms or json)
-      #      - outputs/ssim/ (what-if sensitivity artifacts)
-      #      - outputs/ndvi_timeseries/ (seasonal NDVI/EVI for ADE checks)
       # ------------------------------------------------------------
-      - name: Validate artifact directories
+      - name: Validate base outputs (common)
         run: |
           test -d outputs || (echo "❌ outputs/ directory missing" && exit 1)
           test -f outputs/candidates.json || (echo "❌ outputs/candidates.json missing" && exit 1)
           test -f outputs/candidates.geojson || (echo "❌ outputs/candidates.geojson missing" && exit 1)
+
+      # ------------------------------------------------------------
+      # 6) Heavy-only validations (ADE, PAG, Uncertainty, SSIM, Dossiers)
+      # ------------------------------------------------------------
+      - name: Validate heavy artifacts (ADE/PAG/uncertainty/SSIM/dossiers)
+        if: matrix.profile == 'heavy'
+        run: |
           test -d outputs/reports || (echo "❌ outputs/reports/ dossier directory missing" && exit 1)
-          test -d outputs/pag || (echo "❌ outputs/pag/ (PAG graphs) missing" && exit 1)
+          test -d outputs/pag || (echo "❌ outputs/pag/ missing" && exit 1)
           test -d outputs/uncertainty || (echo "❌ outputs/uncertainty/ missing" && exit 1)
           test -d outputs/ssim || (echo "❌ outputs/ssim/ missing" && exit 1)
           test -d outputs/ndvi_timeseries || (echo "❌ outputs/ndvi_timeseries/ missing" && exit 1)
-
-      # ------------------------------------------------------------
-      # 6) ADE fingerprint checks (seasonal NDVI/EVI + proxies)
-      #    Notebook/pipeline describes ADE fingerprint detection & timeseries export【Notebook】【Architecture】
-      # ------------------------------------------------------------
-      - name: Check ADE fingerprint artifacts
-        run: |
-          # Require at least one candidate to have NDVI/EVI timeseries & ADE fingerprint JSON
+          # At least one time-series and one ADE fingerprint
           ls -1 outputs/ndvi_timeseries/*.csv >/dev/null 2>&1 || (echo "❌ No NDVI/EVI CSV timeseries found" && exit 1)
           ls -1 outputs/ade_fingerprint/*.json >/dev/null 2>&1 || (echo "❌ No ADE fingerprint JSON found" && exit 1)
-
-      # ------------------------------------------------------------
-      # 7) Causal plausibility (PAG) existence check
-      #    The architecture requires saving PAG graphs per candidate (.gml)【Architecture】
-      # ------------------------------------------------------------
-      - name: Check PAG graphs (.gml)
-        run: |
+          # PAG graphs per candidate (at least one)
           ls -1 outputs/pag/*.gml >/dev/null 2>&1 || (echo "❌ No PAG .gml files found" && exit 1)
-
-      # ------------------------------------------------------------
-      # 8) Uncertainty artifacts (histograms/JSON)
-      #    The pipeline requires calibrated uncertainty outputs per candidate【Architecture】
-      # ------------------------------------------------------------
-      - name: Check uncertainty exports
-        run: |
-          # Accept JSON or image histograms
-          ls -1 outputs/uncertainty/*.json >/dev/null 2>&1 || ls -1 outputs/uncertainty/*.png >/dev/null 2>&1 || (echo "❌ No uncertainty artifacts found" && exit 1)
-
-      # ------------------------------------------------------------
-      # 9) SSIM what-if sensitivity artifacts
-      #    Notebook/pipeline includes counterfactual SSIM checks【Architecture】
-      # ------------------------------------------------------------
-      - name: Check SSIM sensitivity exports
-        run: |
-          ls -1 outputs/ssim/*.json >/dev/null 2>&1 || ls -1 outputs/ssim/*.png >/dev/null 2>&1 || (echo "❌ No SSIM sensitivity artifacts found" && exit 1)
-
-      # ------------------------------------------------------------
-      # 10) Dossier files (reports per verified candidate)
-      #     Notebook/pipeline emits report artifacts in outputs/reports/【Architecture】【Repo structure】
-      # ------------------------------------------------------------
-      - name: Check candidate dossiers
-        run: |
-          # Accept PDF, HTML, or Markdown reports
+          # Uncertainty + SSIM (accept JSON or PNG)
+          ls -1 outputs/uncertainty/*.{json,png} >/dev/null 2>&1 || (echo "❌ No uncertainty artifacts found" && exit 1)
+          ls -1 outputs/ssim/*.{json,png} >/dev/null 2>&1 || (echo "❌ No SSIM artifacts found" && exit 1)
+          # Dossiers (PDF/HTML/MD)
           ls -1 outputs/reports/*.{pdf,html,md} >/dev/null 2>&1 || (echo "❌ No candidate dossier files found" && exit 1)
 
       # ------------------------------------------------------------
-      # 11) Upload executed notebook & artifacts for audit
+      # 7) Build Markdown Job Summary (counts + quick links)
+      # ------------------------------------------------------------
+      - name: Summarize results (Markdown)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          CAND_JSON="outputs/candidates.json"
+          CAND_GEOJSON="outputs/candidates.geojson"
+          CAND_COUNT_JSON=0
+          CAND_COUNT_GEO=0
+
+          if command -v jq >/dev/null 2>&1 && [ -f "$CAND_JSON" ]; then
+            if jq -e 'type=="array"' "$CAND_JSON" >/dev/null 2>&1; then
+              CAND_COUNT_JSON=$(jq 'length' "$CAND_JSON")
+            else
+              CAND_COUNT_JSON=$(jq '.candidates|length // 0' "$CAND_JSON")
+            fi
+          fi
+
+          if command -v jq >/dev/null 2>&1 && [ -f "$CAND_GEOJSON" ]; then
+            CAND_COUNT_GEO=$(jq '.features|length // 0' "$CAND_GEOJSON")
+          fi
+
+          DOSSIERS=(outputs/reports/*.{pdf,html,md}); [ -e "${DOSSIERS[0]}" ] || DOSSIERS=()
+          NDVI_CSV=(outputs/ndvi_timeseries/*.csv); [ -e "${NDVI_CSV[0]}" ] || NDVI_CSV=()
+          ADE_JSON=(outputs/ade_fingerprint/*.json); [ -e "${ADE_JSON[0]}" ] || ADE_JSON=()
+          PAG_GML=(outputs/pag/*.gml); [ -e "${PAG_GML[0]}" ] || PAG_GML=()
+          UNC_ART=(outputs/uncertainty/*.{json,png}); [ -e "${UNC_ART[0]}" ] || UNC_ART=()
+          SSIM_ART=(outputs/ssim/*.{json,png}); [ -e "${SSIM_ART[0]}" ] || SSIM_ART=()
+
+          DOSSIER_COUNT="${#DOSSIERS[@]}"
+          NDVI_COUNT="${#NDVI_CSV[@]}"
+          ADE_COUNT="${#ADE_JSON[@]}"
+          PAG_COUNT="${#PAG_GML[@]}"
+          UNC_COUNT="${#UNC_ART[@]}"
+          SSIM_COUNT="${#SSIM_ART[@]}"
+
+          {
+            echo "## 🧪 WDE Kaggle Notebook CI — Run Summary"
+            echo
+            echo "**Profile:** \`${{ matrix.profile || 'heavy' }}\` &nbsp;|&nbsp; **Python:** \`${{ matrix.python || '3.10' }}\`"
+            echo
+            echo "| Artifact | Count | Path |"
+            echo "|---|---:|---|"
+            echo "| Candidates (JSON) | ${CAND_COUNT_JSON} | \`outputs/candidates.json\` |"
+            echo "| Candidates (GeoJSON) | ${CAND_COUNT_GEO} | \`outputs/candidates.geojson\` |"
+            echo "| Candidate Dossiers | ${DOSSIER_COUNT} | \`outputs/reports/\` |"
+            echo "| ADE Fingerprints (JSON) | ${ADE_COUNT} | \`outputs/ade_fingerprint/\` |"
+            echo "| NDVI/EVI Timeseries (CSV) | ${NDVI_COUNT} | \`outputs/ndvi_timeseries/\` |"
+            echo "| PAG Graphs (.gml) | ${PAG_COUNT} | \`outputs/pag/\` |"
+            echo "| Uncertainty Artifacts | ${UNC_COUNT} | \`outputs/uncertainty/\` |"
+            echo "| SSIM Sensitivity | ${SSIM_COUNT} | \`outputs/ssim/\` |"
+            echo
+            echo "### 📦 Quick Access"
+            echo "- Executed notebook: \`notebooks/ade_discovery_pipeline_out_${{ matrix.profile || 'heavy' }}_${{ matrix.python || '3.10' }}.ipynb\`"
+            echo "- All artifacts are attached to this run (see **Artifacts** section above)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------
+      # 8) Upload executed notebook & artifacts for audit
       # ------------------------------------------------------------
       - name: Upload notebook & artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wde-kaggle-notebook-ci
+          name: wde-kaggle-notebook-ci-${{ matrix.profile }}-py${{ matrix.python }}
           path: |
-            notebooks/ade_discovery_pipeline_out.ipynb
+            notebooks/ade_discovery_pipeline_out_${{ matrix.profile }}_${{ matrix.python }}.ipynb
             outputs/
