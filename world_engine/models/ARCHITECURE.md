@@ -1,3 +1,5 @@
+
+
 **World Discovery Engine (WDE) · `world_engine/models/`**
 
 > Mission: robust, explainable, and reproducible models that fuse multi-sensor Earth data to surface archaeologically significant candidates (e.g., ADE soils, earthworks, geoglyphs) with calibrated uncertainty and causal plausibility.
