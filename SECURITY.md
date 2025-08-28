@@ -1,7 +1,3 @@
-Here’s a hardened upgraded SECURITY.md tailored for the World Discovery Engine (WDE) project. It aligns with best practices from NASA-grade reproducibility ￼, CLI/DevOps safety ￼, and archaeological data ethics ￼.
-
-⸻
-
 Security Policy — World Discovery Engine (WDE)
 
 🔒 Reporting a Vulnerability
