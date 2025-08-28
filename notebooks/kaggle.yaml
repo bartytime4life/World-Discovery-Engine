@@ -1,10 +1,41 @@
-random_seed: 42
-sample_rows: 5000
-outputs_dir: wde_outputs
-notebook_name: WDE_Kaggle_Starter.ipynb
-artifacts:
-- demo_candidates_top50.csv
-- run_manifest.json
+# notebooks/kaggle.yaml
+# ==============================================================================
+# 🌍 World Discovery Engine (WDE) — Kaggle Notebook Config
+# ------------------------------------------------------------------------------
+# Purpose:
+#   - Defines deterministic seeds, notebook entrypoint, artifact outputs, and
+#     Kaggle runtime resource limits.
+#   - Ensures reproducibility by keeping all knobs in one place.
+#   - Mirrors configs/default.yaml while tailored for Kaggle environment.
+# ==============================================================================
+
+run:
+  random_seed: 42        # Fixed seed for reproducibility:contentReference[oaicite:3]{index=3}
+  sample_rows: 5000      # Number of demo/sample rows to generate or inspect
+  timestamp_utc: null    # Auto-filled at runtime
+
+notebook:
+  notebook_name: WDE_Kaggle_Starter.ipynb  # Default Kaggle starter:contentReference[oaicite:4]{index=4}
+
+outputs:
+  outputs_dir: wde_outputs
+  artifacts:
+    - demo_candidates_top50.csv
+    - run_manifest.json
+
 limits:
-  runtime_hours: 8.0
-  memory_gb: 19.0
+  runtime_hours: 8.0     # Kaggle free runtime cap:contentReference[oaicite:5]{index=5}
+  memory_gb: 19.0        # Approx upper bound for free GPU/CPU envs:contentReference[oaicite:6]{index=6}
+
+metadata:
+  description: |
+    Ready-to-upload Kaggle config for World Discovery Engine.
+    Runs in a fresh Kaggle kernel without external dependencies.
+    Produces deterministic demo outputs (candidates CSV + run manifest).
+  provenance: |
+    Based on WDE Architecture Specification:contentReference[oaicite:7]{index=7},
+    ADE Discovery Pipeline:contentReference[oaicite:8]{index=8},
+    and Kaggle Technical Guide:contentReference[oaicite:9]{index=9}.
+  ethics: |
+    ⚠ This config ensures reproducibility only.
+    Discovery outputs must respect Indigenous sovereignty (CARE principles).
