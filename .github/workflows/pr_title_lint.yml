@@ -1,0 +1,51 @@
+name: PR Title Lint
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  lint-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title.trim();
+
+            // Allowed types (feel free to expand)
+            const TYPES = ['feat', 'fix', 'docs', 'refactor', 'test', 'ci', 'chore', 'perf', 'build'];
+            // Pattern: type(scope?): imperative summary
+            // Examples: "feat(cli): add detect subcommand", "fix: correct DEM path"
+            const rx = new RegExp(`^(${TYPES.join('|')})(\$begin:math:text$[^)]+\\$end:math:text$)?:\\s+.+$`, 'i');
+            const okFormat = rx.test(title);
+
+            // Imperative mood heuristic: avoid past tense / gerund at the start of summary
+            // e.g., "add", "update", "create", NOT "added/adding/updates/updated"
+            const summary = title.replace(/^([^:]+:\s*)/, ''); // strip "type(scope): "
+            const badStarts = /\b(added|adding|updated|updates|fixed|fixing|removed|removing|changed|changing)\b/i.test(summary);
+
+            if (!okFormat || badStarts) {
+              const tip = `
+❌ **PR title check failed**
+
+**Title:** ${title}
+
+**Expected format:**
+\`type(scope?): imperative summary\`
+
+**Examples**
+- \`feat(cli): add detect subcommand\`
+- \`fix: correct DEM reproject bug\`
+
+**Avoid** starting the summary with past/continuous tense (e.g., "added/adding/updated/updates").
+`;
+              core.setFailed(tip);
+            } else {
+              core.notice('✅ PR title looks good.');
+            }
