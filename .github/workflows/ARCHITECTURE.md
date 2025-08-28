@@ -1,6 +1,3 @@
-
-⸻
-
 🌍 World Discovery Engine (WDE) — CI/CD & Workflow Architecture
 
 /.github/workflows/ARCHITECTURE.md
