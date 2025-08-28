@@ -1,0 +1,29 @@
+# Core pipeline stages
+/world_engine/ingest.py           @data-eng-leads @wde-maintainers
+/world_engine/detect.py           @cv-ml-leads @wde-maintainers
+/world_engine/evaluate.py         @geo-ml-leads @wde-maintainers
+/world_engine/verify.py           @ethics-safety-leads @ml-research-leads @wde-maintainers
+/world_engine/report.py           @ethics-safety-leads @docs-leads @wde-maintainers
+/world_engine/utils/**            @wde-maintainers
+
+# Models & uncertainty
+/world_engine/models/**           @ml-research-leads @wde-maintainers
+
+# Ethics guardrails
+/world_engine/ethics_guardrails.py  @ethics-safety-leads @wde-maintainers
+
+# Configs & registry
+/configs/**                       @data-eng-leads @wde-maintainers
+/datasets.md                      @data-eng-leads @ethics-safety-leads @wde-maintainers
+
+# Notebooks (Kaggle, demos)
+/notebooks/**                     @notebooks-leads @wde-maintainers
+
+# Docs
+/docs/**                          @docs-leads @ethics-safety-leads
+/README.md                        @docs-leads
+
+# CI/CD & DevOps
+/.github/**                       @devops-leads @wde-maintainers
+/Makefile                         @devops-leads @wde-maintainers
+/Dockerfile                       @devops-leads @wde-maintainers
