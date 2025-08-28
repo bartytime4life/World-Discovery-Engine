@@ -1,0 +1,159 @@
+name: "🔒 Security Report"
+description: "Report a security issue (vulnerability, secret exposure, supply-chain risk) with evidence, impact, and a safe fix path."
+title: "[security] <short summary>"
+labels:
+  - security
+  - needs-triage
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🔒 Security Report — World Discovery Engine (WDE)
+        Please provide **clear evidence, reproduction steps, and a safe remediation plan**.
+        Changes must remain **reproducible**, **auditable**, and respect **CARE/sovereignty** defaults.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity (initial assessment)
+      options:
+        - Critical (remote code exec, credential compromise, data exfiltration)
+        - High (privilege escalation, auth bypass, tampering)
+        - Medium (DoS, info leak with constraints)
+        - Low (best-practice, hardening, misconfig)
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Briefly describe the issue and why it matters.
+      placeholder: "Example: GDAL version vulnerable to CVE-XXXX-YYYY in Docker image; allows arbitrary file write via crafted dataset."
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected
+    attributes:
+      label: Affected Components / Paths
+      description: List files, modules, workflows, images, or secrets involved.
+      placeholder: |
+        - Dockerfile (gdal==X.Y)
+        - requirements.txt (requests==…)
+        - .github/workflows/ci.yml (untrusted action ref)
+        - notebooks/ade_discovery_pipeline.ipynb (hard-coded token?)
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps & Evidence
+      description: Exact steps, POCs, logs, or screenshots. Include environment details (OS, Python, Docker image digest).
+      placeholder: |
+        1) Build image `sha256:<digest>`
+        2) Run `python exploit.py`
+        3) Observe write to /workspace/.ssh/id_rsa
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: cve_refs
+    attributes:
+      label: References (CVE(s), advisories, SBOM entries)
+      description: Link CVEs, vendor advisories, GHSA, osv.dev IDs, and SBOM snippets.
+      placeholder: |
+        - CVE-2025-XXXX (GDAL)
+        - GHSA-xxxx-xxxx (requests)
+        - SBOM: /artifacts/sbom.json (component hash ...)
+    validations:
+      required: false
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact Analysis
+      description: Who/what is at risk? CI, local dev, Kaggle notebook runs, data integrity, or privacy?
+      placeholder: |
+        - Threat: arbitrary file write in CI job container
+        - Risk: overwrite pipeline config; exfiltrate Kaggle API token
+        - Scope: affects ci.yml matrix (ubuntu-latest, py3.11); Docker image tag vX.Y
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: data_ethics
+    attributes:
+      label: Data & Ethics Safeguards
+      options:
+        - label: No Indigenous location data exposed; coordinate masking remains ON in public outputs
+          required: true
+        - label: CARE/sovereignty banners unaffected by the issue or by the fix
+          required: true
+        - label: No secrets or PII appear in logs or artifacts after fix (validate CI artifacts)
+          required: true
+
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Proposed Mitigation / Patch
+      description: The minimal, reviewable change. Include version pins, action SHAs, or hardening flags.
+      placeholder: |
+        - Pin `actions/checkout@<sha>`
+        - Bump GDAL to 3.x.y+security; rebuild Docker; attest digest
+        - Add `.dockerignore` for secrets; `--no-cache-dir`; drop root
+        - Poetry pin `requests>=2.32.3`
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: workarounds
+    attributes:
+      label: Temporary Workarounds
+      description: Safe stopgaps until patch is merged (e.g., disabling a workflow path, read-only mounts).
+      placeholder: |
+        - Disable submission.yml `workflow_dispatch` for external forks
+        - Mount `:ro` volumes in CI job; mask env vars
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: reproducibility
+    attributes:
+      label: Reproducibility & CI/CD
+      options:
+        - label: Seeds, configs, and dataset versions remain pinned (no “magic numbers”) [oai_citation:4‡Best Practices and Innovations in AI Development (2025).pdf](file-service://file-W9nyvnJoUWbM7N894B9LGr)
+          required: true
+        - label: CI (`.github/workflows/ci.yml`) green on matrix; Docker image digest recorded in PR [oai_citation:5‡World Discovery Engine (WDE) Repository Structure.pdf](file-service://file-916yJuCrNVznhDZinpxPeF)
+          required: true
+        - label: Kaggle notebook still runs end-to-end after fix (Save & Run All) [oai_citation:6‡Kaggle Platform: Comprehensive Technical Guide.pdf](file-service://file-8vyu9Y6mWdeZdwaq5qSBjm)
+          required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation Plan
+      description: Tests to prove the issue is fixed (unit/integration), plus negative tests. Include SBOM diff if applicable.
+      placeholder: |
+        - Add unit test for path traversal attempt
+        - Integration: run notebook E2E; verify no secrets in artifacts
+        - SBOM: compare vulnerable vs fixed component versions
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Plan
+      description: Exact steps to revert safely if the fix breaks CI or functionality.
+      placeholder: |
+        - Revert commit <sha>; restore image digest <sha256:…>
+        - `dvc repro` + smoke tests; re-run CI; confirm notebook E2E
+    validations:
+      required: true
