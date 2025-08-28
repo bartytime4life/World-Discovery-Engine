@@ -1,0 +1,95 @@
+# configs/aoi_library.yaml
+# ==============================================================================
+# World Discovery Engine (WDE) — AOI Library
+# ------------------------------------------------------------------------------
+# A catalog of ready-to-use Areas of Interest (AOIs) for quick switching in
+# notebooks/CLI without hand-editing coordinates. All bounds use EPSG:4326.
+# ==============================================================================
+
+meta:
+  crs: "EPSG:4326"
+  default_tile_size_deg: 0.05     # ~5 km tiles as per architecture
+  note: "Lon/Lat order is [min_lon, min_lat, max_lon, max_lat]"
+
+aoi_list:
+
+  - name: Amazonia-West
+    bounds_lonlat: [-75.0, -15.0, -45.0, -2.0]
+    tile_size_deg: 0.05
+    center_lonlat: [-60.0, -8.5]
+    note: "Western/Central Amazon basin (demo)."
+
+  - name: Amazonia-East
+    bounds_lonlat: [-55.0, -12.0, -45.0, -1.0]
+    tile_size_deg: 0.05
+    center_lonlat: [-50.0, -6.5]
+    note: "Eastern Amazon, Pará/Maranhão frontier; mosaic forest–agriculture edge."
+
+  - name: Xingu-Basin
+    bounds_lonlat: [-55.5, -13.5, -50.0, -3.5]
+    tile_size_deg: 0.05
+    center_lonlat: [-52.5, -8.5]
+    note: "Xingu River corridor; known earthwork landscapes & frontier pressures."
+
+  - name: Tapajos-Basin
+    bounds_lonlat: [-60.0, -10.5, -54.0, -3.5]
+    tile_size_deg: 0.05
+    center_lonlat: [-57.0, -7.0]
+    note: "Tapajós River region; terraces/floodplain interactions."
+
+  - name: Madeira-Upper
+    bounds_lonlat: [-70.5, -13.5, -62.0, -6.0]
+    tile_size_deg: 0.05
+    center_lonlat: [-66.0, -9.5]
+    note: "Upper Madeira; potential ADE signatures along tributaries."
+
+  - name: Madeira-Lower
+    bounds_lonlat: [-63.0, -10.5, -59.0, -3.5]
+    tile_size_deg: 0.05
+    center_lonlat: [-61.0, -7.0]
+    note: "Lower Madeira; mixed floodplain/levee systems."
+
+  - name: Negro-Solimões-Confluence
+    bounds_lonlat: [-61.5, -4.0, -58.0, -2.3]
+    tile_size_deg: 0.05
+    center_lonlat: [-60.0, -3.2]
+    note: "Manaus & meeting of waters; complex hydrology/settlement history."
+
+  - name: Solimoes-Mid
+    bounds_lonlat: [-72.0, -6.0, -65.5, -3.0]
+    tile_size_deg: 0.05
+    center_lonlat: [-68.7, -4.5]
+    note: "Mid Solimões corridor; levee ridges and paleochannels."
+
+  - name: Acre-Purus
+    bounds_lonlat: [-74.0, -13.5, -66.5, -7.0]
+    tile_size_deg: 0.05
+    center_lonlat: [-70.2, -10.0]
+    note: "Acre–Purus interfluve; classic geoglyph provinces."
+
+  - name: Marajo-Para-Coastal
+    bounds_lonlat: [-51.0, -2.6, -47.8, -0.3]
+    tile_size_deg: 0.05
+    center_lonlat: [-49.4, -1.45]
+    note: "Marajó Island & Pará estuary; tidal/floodplain archaeology contexts."
+
+  - name: Andean-Foreland-North
+    bounds_lonlat: [-77.5, -6.0, -72.0, -2.0]
+    tile_size_deg: 0.05
+    center_lonlat: [-74.5, -4.0]
+    note: "Andean foreland (Peru/Ecuador); upland–lowland ecotones."
+
+usage:
+  # How to reference in your main pipeline config:
+  # 1) Pick an AOI by name and copy its bounds into configs/pipeline.yaml (aoi.bbox)
+  # 2) Or load dynamically in CLI/notebook:
+  #    - CLI example:
+  #        python -m world_engine.cli full-run \
+  #          --config configs/pipeline.yaml \
+  #          --override aoi.bbox="[-70.5,-13.5,-62.0,-6.0]"
+  #    - Notebook example:
+  #        from world_engine.utils.config_loader import load_yaml
+  #        aoi_lib = load_yaml("configs/aoi_library.yaml")
+  #        bbox = next(a['bounds_lonlat'] for a in aoi_lib['aoi_list'] if a['name']=="Acre-Purus")
+  #        CONFIG['aoi']['bbox'] = bbox
+  note: "Tile size can be overridden per run; defaults come from meta.default_tile_size_deg."
