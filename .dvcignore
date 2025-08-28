@@ -1,10 +1,101 @@
 # FILE: .dvcignore
 # -------------------------------------------------------------------------------------------------
-# Ignore transient / local-only paths so DVC doesn't try to track them by accident.
+# 🌍 World Discovery Engine (WDE) — DVC Ignore Rules
+#
+# Purpose:
+#   Define what DVC should *ignore* so it only tracks meaningful, reproducible artifacts.
+#   Prevents accidental caching of transient files, local runs, editor junk, logs, and oversized spillovers.
+#
+# Design:
+#   - Mirrors repo architecture [oai_citation:0‡World Discovery Engine (WDE) Repository Structure.pdf](file-service://file-916yJuCrNVznhDZinpxPeF)
+#   - Optimized for Kaggle, CI, and local HPC runs [oai_citation:1‡World Discovery Engine (WDE) Architecture Specification.pdf](file-service://file-PiJpkFqNs2pDTFMtxexAuF)
+#   - Covers notebooks, logs, GIS sidecars, caches, and IDE metadata
+#
+# Notes:
+#   • All *source of truth* data is in configs/datasets.md + DVC-registered outputs [oai_citation:2‡Enriching the World Discovery Engine for Archaeology & Earth Systems.pdf](file-service://file-XaAoukBHFHF8vdPNUYGZhm)
+#   • All heavy runtime outputs (artifacts/, reports/, site/, logs/) are regenerated, not versioned
+#   • Fine-grained provenance is captured by report_summary.json & run_manifest.json [oai_citation:3‡World Discovery Engine (WDE) Architecture Specification.pdf](file-service://file-PiJpkFqNs2pDTFMtxexAuF)
+# -------------------------------------------------------------------------------------------------
+
+# ------------------------
+# Jupyter / notebooks
+# ------------------------
 **/.ipynb_checkpoints/**
+*.nbconvert.ipynb
+*.ipynb_convert/
+
+# ------------------------
+# Python / runtime caches
+# ------------------------
 **/__pycache__/**
-**/.DS_Store
-site/**
-reports/**
-artifacts/**
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.mypy_cache/
+.pytest_cache/
+.coverage
+*.egg-info/
+
+# ------------------------
+# Logs & local state
+# ------------------------
 logs/**
+*.log
+*.tmp
+*.bak
+
+# ------------------------
+# OS / editor junk
+# ------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/**
+.idea/**
+
+# ------------------------
+# Build / packaging
+# ------------------------
+build/
+dist/
+.eggs/
+*.whl
+*.tar.gz
+
+# ------------------------
+# DVC internals (local only)
+# ------------------------
+.dvc/cache/
+.dvc/tmp/
+.dvc/config.local
+
+# ------------------------
+# WDE runtime outputs
+# ------------------------
+artifacts/**           # metrics, plots, dossiers, bundles (reproducible, not versioned)
+site/**                # docs site build
+reports/**             # per-candidate reports in MD/HTML
+outputs/**             # notebook-generated outputs
+
+# ------------------------
+# GIS / raster spillover
+# ------------------------
+*.aux.xml
+*.ovr
+*.tfw
+*.prj
+*.sidecar
+*.worldfile
+*.tif.aux
+*.vrt
+
+# ------------------------
+# Kaggle / secrets
+# ------------------------
+kaggle.json
+*.key
+*.pem
+.env
+.env.*
