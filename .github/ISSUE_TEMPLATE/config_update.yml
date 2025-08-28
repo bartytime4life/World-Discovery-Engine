@@ -1,0 +1,84 @@
+name: "⚙️ Config Update"
+description: "Request a change to configs (tile size, thresholds, seeds, paths) with reproducibility & ethics checks."
+title: "[config] <short summary>"
+labels:
+  - configs
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## ⚙️ Config Update — World Discovery Engine (WDE)
+        Submit minimal, reviewable changes with clear defaults and a rollback plan.
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale & Expected Impact
+      description: Why is this change needed? What do you expect to improve (recall/precision/runtime/reproducibility)?
+      placeholder: "Increase tile_size_deg to reduce runtime; lower anomaly_threshold to increase recall..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: params
+    attributes:
+      label: Parameters to Change
+      description: List each key and intended value(s). Include file(s) and section(s) (e.g., `configs/default.yaml`).
+      placeholder: |
+        - pipeline.tile_size_deg: 0.05 → 0.1
+        - pipeline.anomaly_threshold: 0.80 → 0.72
+        - seeds.numpy/torch/random: 42 → 1337
+    validations:
+      required: true
+
+  - type: textarea
+    id: datasets
+    attributes:
+      label: Dataset Implications
+      description: Any new/changed datasets, CRS/resolution effects, or transforms (link PRs/issues in `datasets.md`).
+      placeholder: "No changes; still Sentinel-2 L2A + SRTM. CRS remains EPSG:4326."
+    validations:
+      required: true
+
+  - type: textarea
+    id: ethics
+    attributes:
+      label: Ethics & Safety
+      description: Confirm guardrails (coord masking, sovereignty banners) remain active for public outputs.
+      placeholder: "No change to masking; sovereignty banners still triggered in report stage."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: reproducibility
+    attributes:
+      label: Reproducibility Checks
+      options:
+        - label: Seeds defined and logged (numpy/random/torch)
+          required: true
+        - label: Defaults avoid “magic numbers” (values live in `configs/*.yaml`)
+          required: true
+        - label: Docker/Poetry build ok (no broken deps)
+          required: true
+        - label: DVC stages unaffected or updated (and `dvc repro` passes)
+          required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests & Benchmarks
+      description: Provide quick before→after metrics (runtime, memory) and test notes (unit/integration).
+      placeholder: "Runtime down 18% on sample AOI; unit/integration tests green."
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Plan
+      description: How to revert safely if metrics regress?
+      placeholder: "Restore prior config commit <sha>, rerun smoke tests + dvc repro."
+    validations:
+      required: true
