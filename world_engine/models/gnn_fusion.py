@@ -1,4 +1,4 @@
-# /world_engine/models/gnn_fusion.py
+# FILE: world_engine/models/gnn_fusion.py
 # ======================================================================================
 # World Discovery Engine (WDE)
 # GNNFusion — Multi-sensor encoder + Graph Neural Network fusion model (pure PyTorch)
@@ -10,6 +10,7 @@
 #   • Message passing GNN (GCN or GAT) implemented WITHOUT torch-geometric, so it runs
 #     in standard Kaggle runtimes and plain servers. Uses PyTorch sparse ops for GCN
 #     and a simple edge-softmax loop for GAT.
+#   • Optional edge weights and edge features (scalar gating) without extra deps.
 #   • Graph builders (kNN / radius / temporal window) to construct edges on the fly.
 #   • Heads for classification (logits), regression (scores), and optional uncertainty
 #     (log variance) for NASA-grade diagnostics in WDE candidate scoring.
@@ -366,24 +367,29 @@ def _symmetrize(edge_index: torch.Tensor) -> torch.Tensor:
     return torch.cat([edge_index, rev], dim=1)
 
 
-def _build_gcn_norm_adj(edge_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
+def _build_gcn_norm_adj(edge_index: torch.Tensor, num_nodes: int, edge_weight: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Build normalized adjacency A_hat = D^{-1/2} (A + I) D^{-1/2} as a sparse COO tensor.
     edge_index is [2, E] (dst, src). Returns a coalesced torch.sparse_coo_tensor shape [N, N].
+    If edge_weight is provided [E], it is applied before normalization.
     """
     # Add reversed edges to force symmetry and add self loops
     ei = _symmetrize(edge_index)
+    ew = None
+    if edge_weight is not None:
+        ew = torch.cat([edge_weight, edge_weight], dim=0)
     ei = _add_self_loops(ei, num_nodes)  # [2, E’]
+    if ew is not None:
+        ew = torch.cat([ew, torch.ones(num_nodes, device=ei.device, dtype=ew.dtype)], dim=0)
 
-    # Values all ones initially (unweighted)
-    values = torch.ones(ei.shape[1], device=ei.device, dtype=torch.float32)
+    # Values all ones initially (unweighted) unless ew provided
+    values = torch.ones(ei.shape[1], device=ei.device, dtype=torch.float32) if ew is None else ew.to(dtype=torch.float32)
 
-    # Compute degree: sum of incoming weights per node (row-sum of A)
-    # deg[i] = sum_j A[i, j] (because index 0 is dst)
+    # Degree on destination
     deg = torch.zeros(num_nodes, device=ei.device, dtype=torch.float32)
-    deg.index_add_(0, ei[0], values)  # accumulate by destination index
+    deg.index_add_(0, ei[0], values)
 
-    # Normalization for each edge: 1 / sqrt(deg[dst] * deg[src])
+    # Normalization per edge
     d_dst = deg[ei[0]]
     d_src = deg[ei[1]]
     norm = values / torch.sqrt(torch.clamp(d_dst * d_src, min=1e-12))
@@ -404,8 +410,14 @@ class GCNLayer(nn.Module):
         super().__init__()
         self.lin = nn.Linear(in_dim, out_dim, bias=bias)
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
-        A_hat = _build_gcn_norm_adj(edge_index, num_nodes)  # sparse [N, N]
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        num_nodes: int,
+        edge_weight: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        A_hat = _build_gcn_norm_adj(edge_index, num_nodes, edge_weight=edge_weight)  # sparse [N, N]
         xw = self.lin(x)                                    # [N, out_dim]
         y = torch.sparse.mm(A_hat, xw)                      # [N, out_dim]
         return F.relu(y, inplace=True)
@@ -425,9 +437,7 @@ class GATLayer(nn.Module):
         α_ij = softmax_over_j(e_ij) for fixed i (destination).
       and output:
         y_i = Σ_j α_ij * (W x_j)
-    - For simplicity/compatibility, we implement the softmax per destination node
-      using a Python loop over unique destinations. This is acceptable for mid-sized
-      graphs typical in WDE tiles; for very large graphs upstream batching is advised.
+    - Per-destination softmax is implemented via a Python loop over unique dst nodes.
     """
 
     def __init__(self, in_dim: int, out_dim: int, neg_slope: float = 0.2, bias: bool = True):
@@ -436,11 +446,16 @@ class GATLayer(nn.Module):
         self.att = nn.Parameter(torch.empty(2 * out_dim))  # a vector for [Wh_i || Wh_j]
         self.bias = nn.Parameter(torch.zeros(out_dim)) if bias else None
         self.leaky_relu = nn.LeakyReLU(negative_slope=neg_slope, inplace=True)
-        # Xavier init for attention as in GAT
         nn.init.xavier_uniform_(self.lin.weight)
         nn.init.xavier_uniform_(self.att.view(1, -1))
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        num_nodes: int,
+        edge_weight: Optional[torch.Tensor] = None,  # not used in basic GAT
+    ) -> torch.Tensor:
         Wh = self.lin(x)  # [N, out_dim]
         dst, src = edge_index  # [E], [E]
 
@@ -452,9 +467,7 @@ class GATLayer(nn.Module):
 
         # Softmax over incoming edges for each destination i
         y = torch.zeros_like(Wh)
-        # Group edges by destination
         unique_dst, inverse = torch.unique(dst, return_inverse=True)
-        # Loop over unique destinations (acceptable for mid-sized E)
         for g, i_node in enumerate(unique_dst.tolist()):
             mask = (inverse == g)
             e_i = e[mask]                           # [E_i]
@@ -502,10 +515,13 @@ class GNNStack(nn.Module):
         self.layers = nn.ModuleList(layers)
         self.norms = nn.ModuleList([nn.LayerNorm(hidden_dim) for _ in range(num_layers)]) if layernorm else None
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: Optional[torch.Tensor] = None) -> torch.Tensor:
         n = x.shape[0]
         for li, layer in enumerate(self.layers):
-            h = layer(x, edge_index, num_nodes=n)
+            if isinstance(layer, GCNLayer):
+                h = layer(x, edge_index, num_nodes=n, edge_weight=edge_weight)
+            else:
+                h = layer(x, edge_index, num_nodes=n, edge_weight=edge_weight)
             if self.layernorm:
                 h = self.norms[li](h)
             h = self.dropout(h)
@@ -530,6 +546,8 @@ class GNNFusion(nn.Module):
         Mapping modality → tensor of shape [N, dim]. Only modalities present are used.
     edge_index : Tensor
         Long tensor of shape [2, E] in (dst, src) format.
+    edge_weight : Optional Tensor
+        Edge weights [E] (for GCN). Ignored by vanilla GAT.
     return_embeddings : bool
         If True, include "emb" key in outputs (post-GNN embeddings).
 
@@ -622,6 +640,7 @@ class GNNFusion(nn.Module):
         self,
         features: Dict[str, torch.Tensor],
         edge_index: torch.Tensor,
+        edge_weight: Optional[torch.Tensor] = None,
         return_embeddings: bool = True,
     ) -> Dict[str, torch.Tensor]:
         # 1) Encode each available modality
@@ -631,7 +650,7 @@ class GNNFusion(nn.Module):
         z0 = self.fusion(emb_dict)                  # [N, H]
 
         # 3) Graph propagation
-        z = self.gnn(z0, edge_index)                # [N, H]
+        z = self.gnn(z0, edge_index, edge_weight=edge_weight)  # [N, H]
 
         # 4) Heads
         out: Dict[str, torch.Tensor] = {}
@@ -867,4 +886,3 @@ if __name__ == "__main__":
     with torch.no_grad():
         out2 = model2({k: v.cpu() for k, v in feats.items()}, edge_index=edge_index.cpu())
         print("Reload OK:", tuple(out2["emb"].shape))
-```
