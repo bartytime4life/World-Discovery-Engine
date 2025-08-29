@@ -1,5 +1,4 @@
-```python
-# /models/uncertainty_bgnn.py
+# FILE: world_engine/models/uncertainty_bgnn.py
 # ======================================================================================
 # World Discovery Engine (WDE)
 # UncertaintyBGNN — Bayesian Graph Neural Network with Aleatoric + Epistemic Uncertainty
@@ -9,28 +8,33 @@
 #
 #   • Graph Convolutional layers (GCN) with either deterministic Linear or Bayesian
 #     mean-field (variational) Linear (BayesLinear) weights.
+#   • Optional edge weights (and simple edge features -> scalar gating) without PyG.
 #   • Heteroscedastic regression head: predicts μ and log σ² (aleatoric uncertainty).
 #   • Classification head: Monte Carlo (MC) sampling for predictive probabilities,
-#     with Expected Calibration Error (ECE) utility.
+#     with Expected Calibration Error (ECE), Brier Score, entropy & mutual information.
 #   • Epistemic uncertainty via MC dropout and/or weight sampling from BayesLinear.
-#   • ELBO training with KL regularization (β-annealing optional).
-#   • kNN / radius graph builders and sparse normalized adjacency without PyG.
+#   • ELBO training with KL regularization and optional β-annealing scheduler.
+#   • kNN / radius graph builders (with/without weights) and sparse normalized adjacency.
+#   • Temperature scaling calibrator for classification post-hoc calibration.
+#   • Laplacian positional encodings (LPE) helper for temporal/spectral context.
 #
 # Design goals
 # ------------
-# - Pure PyTorch, no torch-geometric; graphs represented by (dst, src) edge_index.
+# - Pure PyTorch; graphs represented by (dst, src) edge_index (COO).
 # - Practical defaults, reproducibility by seed, clear save/load helpers.
 # - Works out of the box for node-level classification or regression.
 #
 # Typical usage
 # -------------
-#   from models.uncertainty_bgnn import (
+#   from world_engine.models.uncertainty_bgnn import (
 #       UncertaintyBGNN, UncertaintyBGNNConfig, build_knn_graph,
-#       heteroscedastic_gaussian_nll
+#       heteroscedastic_gaussian_nll, TemperatureScaler
 #   )
 #
 #   X = torch.randn(N, D)
-#   edge_index = build_knn_graph(coords, k=8)    # [2, E], (dst, src)
+#   edge_index = build_knn_graph(coords, k=8)            # [2, E], (dst, src)
+#   # or with weights:
+#   # edge_index, edge_weight = build_knn_graph_with_weights(coords, k=8)
 #
 #   cfg = UncertaintyBGNNConfig(
 #       in_dim=D, hidden_dim=128, num_layers=2,
@@ -40,9 +44,8 @@
 #
 #   # Training step (ELBO for Bayes layers + NLL for task)
 #   outs = model(X, edge_index=edge_index, sample=True)  # sample weights for ELBO
-#   nll = outs["nll"]  # computed only if y_true passed to loss helpers (see below)
 #   kl  = model.kl_divergence()
-#   loss = nll + beta * kl
+#   # compute task loss via elbo_loss_* helpers
 #
 # License
 # -------
@@ -94,17 +97,34 @@ def _symmetrize(edge_index: torch.Tensor) -> torch.Tensor:
     return torch.cat([edge_index, edge_index.flip(0)], dim=1)
 
 
-def build_norm_adj(edge_index: torch.Tensor, num_nodes: int, add_loops: bool = True, symmetrize: bool = True) -> torch.Tensor:
+def build_norm_adj(
+    edge_index: torch.Tensor,
+    num_nodes: int,
+    add_loops: bool = True,
+    symmetrize: bool = True,
+    edge_weight: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """
     Return A_hat = D^{-1/2} A D^{-1/2} as a coalesced sparse COO tensor [N, N].
     edge_index format is [2, E] with rows [dst, src].
+    If `edge_weight` is provided (shape [E]), it is used as base values for edges before normalization.
     """
     ei = edge_index
+    ew = edge_weight
     if symmetrize:
         ei = _symmetrize(ei)
+        if ew is not None:
+            ew = torch.cat([ew, ew], dim=0)
     if add_loops:
         ei = _add_self_loops(ei, num_nodes)
-    values = torch.ones(ei.shape[1], device=ei.device, dtype=torch.float32)
+        if ew is not None:
+            # weight for self-loops = 1.0
+            ew = torch.cat([ew, torch.ones(num_nodes, device=ei.device, dtype=ew.dtype)], dim=0)
+
+    if ew is None:
+        values = torch.ones(ei.shape[1], device=ei.device, dtype=torch.float32)
+    else:
+        values = ew.to(dtype=torch.float32, device=ei.device)
 
     deg = torch.zeros(num_nodes, device=ei.device, dtype=torch.float32)
     deg.index_add_(0, ei[0], values)  # sum incoming per dst
@@ -144,6 +164,42 @@ def build_knn_graph(coords: Union[torch.Tensor, np.ndarray], k: int = 8) -> torc
     return torch.tensor([dst, src], dtype=torch.long)
 
 
+def build_knn_graph_with_weights(coords: Union[torch.Tensor, np.ndarray], k: int = 8) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Build an undirected kNN graph with symmetric edges and distance-based weights (1 / (1 + d)).
+    Returns (edge_index [2, E], edge_weight [E]).
+    """
+    X = _to_numpy(coords)
+    N = X.shape[0]
+    try:
+        from sklearn.neighbors import NearestNeighbors  # type: ignore
+        nn_s = NearestNeighbors(n_neighbors=min(k + 1, N), algorithm="auto", metric="euclidean")
+        nn_s.fit(X)
+        dist, inds = nn_s.kneighbors(X, return_distance=True)
+        src, dst, w = [], [], []
+        for i in range(N):
+            for d, j in zip(dist[i, 1:], inds[i, 1:]):
+                weight = 1.0 / (1.0 + float(d))
+                dst.extend([i, int(j)])
+                src.extend([int(j), i])
+                w.extend([weight, weight])
+    except Exception:
+        d2 = np.sum((X[:, None, :] - X[None, :, :]) ** 2, axis=-1)
+        src, dst, w = [], [], []
+        for i in range(N):
+            idx = np.argpartition(d2[i], kth=min(k + 1, N - 1))[: k + 1]
+            idx = idx[idx != i][:k]
+            for j in idx:
+                d = float(np.sqrt(d2[i, j]))
+                weight = 1.0 / (1.0 + d)
+                dst.extend([i, int(j)])
+                src.extend([int(j), i])
+                w.extend([weight, weight])
+    edge_index = torch.tensor([dst, src], dtype=torch.long)
+    edge_weight = torch.tensor(w, dtype=torch.float32)
+    return edge_index, edge_weight
+
+
 def build_radius_graph(coords: Union[torch.Tensor, np.ndarray], radius: float) -> torch.Tensor:
     X = _to_numpy(coords)
     N = X.shape[0]
@@ -156,6 +212,24 @@ def build_radius_graph(coords: Union[torch.Tensor, np.ndarray], radius: float) -
             dst.append(i); src.append(int(j))
             dst.append(int(j)); src.append(i)
     return torch.tensor([dst, src], dtype=torch.long)
+
+
+# ======================================================================================
+# Laplacian Positional Encodings (optional)
+# ======================================================================================
+
+def laplacian_positional_encodings(edge_index: torch.Tensor, num_nodes: int, k: int = 8) -> torch.Tensor:
+    """
+    Compute top-k eigenvectors of the (symmetric normalized) Laplacian for positional encodings.
+    Returns [N, k] tensor on CPU (you can .to(device) after).
+    """
+    A = build_norm_adj(edge_index, num_nodes).to_dense().cpu()
+    I = torch.eye(num_nodes, dtype=A.dtype)
+    L = I - A  # normalized Laplacian
+    # Use torch.linalg.eigh (CPU) — for larger N, consider sparse eigensolvers
+    evals, evecs = torch.linalg.eigh(L)  # ascending
+    k = min(k, num_nodes)
+    return evecs[:, :k]  # [N, k]
 
 
 # ======================================================================================
@@ -195,7 +269,6 @@ class BayesLinear(nn.Module):
         self._kl = None  # cached on last forward when sample=True
 
     def reset_parameters(self) -> None:
-        # He initialization for μ; ρ initialized so σ ~ small
         nn.init.kaiming_uniform_(self.w_mu, a=math.sqrt(5))
         nn.init.constant_(self.w_rho, -5.0)
         if self.b_mu is not None:
@@ -243,21 +316,51 @@ class BayesLinear(nn.Module):
 
 
 # ======================================================================================
-# GCN layers (deterministic and Bayesian)
+# GCN layers (deterministic and Bayesian) with optional edge weights/features
 # ======================================================================================
+
+class EdgeGate(nn.Module):
+    """
+    Optional edge feature gating: maps edge_attr [E, F] -> scalar weights [E] via an MLP,
+    which modulates the normalized adjacency (pre-normalization).
+    """
+    def __init__(self, in_dim: int, hidden: int = 16):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(in_dim, hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden, 1),
+            nn.Sigmoid(),  # [0, 1]
+        )
+
+    def forward(self, edge_attr: torch.Tensor) -> torch.Tensor:
+        return self.mlp(edge_attr).squeeze(-1)
+
 
 class GCNLayerDet(nn.Module):
     """
     Deterministic GCN layer: y = ReLU( A_hat @ (X W) ).
     """
 
-    def __init__(self, in_dim: int, out_dim: int, bias: bool = True):
+    def __init__(self, in_dim: int, out_dim: int, bias: bool = True, edge_feat_dim: int = 0):
         super().__init__()
         self.lin = nn.Linear(in_dim, out_dim, bias=bias)
+        self.edge_gate = EdgeGate(edge_feat_dim) if edge_feat_dim > 0 else None
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_weight: Optional[torch.Tensor] = None,
+        edge_attr: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.edge_gate is not None and edge_attr is not None:
+            gated = self.edge_gate(edge_attr)  # [E]
+            ew = gated if edge_weight is None else (edge_weight * gated)
+        else:
+            ew = edge_weight
         N = x.shape[0]
-        A = build_norm_adj(edge_index, N)  # sparse
+        A = build_norm_adj(edge_index, N, edge_weight=ew)  # sparse
         xw = self.lin(x)
         y = torch.sparse.mm(A, xw)
         return F.relu(y, inplace=True)
@@ -268,13 +371,26 @@ class GCNLayerBayes(nn.Module):
     Bayesian GCN layer: y = ReLU( A_hat @ (X W̃) ), where W̃ ~ q(W) (mean-field).
     """
 
-    def __init__(self, in_dim: int, out_dim: int, prior_sigma: float = 0.1, bias: bool = True):
+    def __init__(self, in_dim: int, out_dim: int, prior_sigma: float = 0.1, bias: bool = True, edge_feat_dim: int = 0):
         super().__init__()
         self.blin = BayesLinear(in_dim, out_dim, prior_sigma=prior_sigma, bias=bias)
+        self.edge_gate = EdgeGate(edge_feat_dim) if edge_feat_dim > 0 else None
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, sample: bool = True) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        sample: bool = True,
+        edge_weight: Optional[torch.Tensor] = None,
+        edge_attr: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.edge_gate is not None and edge_attr is not None:
+            gated = self.edge_gate(edge_attr)  # [E]
+            ew = gated if edge_weight is None else (edge_weight * gated)
+        else:
+            ew = edge_weight
         N = x.shape[0]
-        A = build_norm_adj(edge_index, N)  # sparse
+        A = build_norm_adj(edge_index, N, edge_weight=ew)  # sparse
         xw = self.blin(x, sample=sample)
         y = torch.sparse.mm(A, xw)
         return F.relu(y, inplace=True)
@@ -326,6 +442,13 @@ class UncertaintyBGNNConfig:
     predict_log_var : bool
         If True in regression, predicts log σ² (aleatoric uncertainty).
 
+    Edge / Positional
+    -----------------
+    edge_feat_dim : int
+        If >0, expects edge_attr [E, edge_feat_dim] and applies a scalar gate.
+    use_lpe : int
+        If >0, number of Laplacian PE dims to concatenate to input features.
+
     Training helpers
     ----------------
     seed : int
@@ -350,13 +473,17 @@ class UncertaintyBGNNConfig:
     regression_targets: int = 1
     predict_log_var: bool = True
 
+    # Edge / Positional
+    edge_feat_dim: int = 0
+    use_lpe: int = 0
+
     # Training helpers
     seed: int = 42
 
 
 class UncertaintyBGNN(nn.Module):
     """
-    Bayesian Graph Neural Network with optional aleatoric head.
+    Bayesian Graph Neural Network with optional aleatoric head and edge gating.
 
     Forward outputs
     ---------------
@@ -384,13 +511,14 @@ class UncertaintyBGNN(nn.Module):
         set_global_seed(cfg.seed)
 
         layers: List[nn.Module] = []
-        dims = [cfg.in_dim] + [cfg.hidden_dim] * cfg.num_layers
+        in0 = cfg.in_dim + (cfg.use_lpe if cfg.use_lpe > 0 else 0)
+        dims = [in0] + [cfg.hidden_dim] * cfg.num_layers
         for i in range(cfg.num_layers):
             in_d, out_d = dims[i], dims[i + 1]
             if cfg.bayes_layers:
-                layers.append(GCNLayerBayes(in_d, out_d, prior_sigma=cfg.prior_sigma, bias=True))
+                layers.append(GCNLayerBayes(in_d, out_d, prior_sigma=cfg.prior_sigma, bias=True, edge_feat_dim=cfg.edge_feat_dim))
             else:
-                layers.append(GCNLayerDet(in_d, out_d))
+                layers.append(GCNLayerDet(in_d, out_d, edge_feat_dim=cfg.edge_feat_dim))
         self.gnn = nn.ModuleList(layers)
         self.norms = nn.ModuleList([nn.LayerNorm(cfg.hidden_dim) for _ in range(cfg.num_layers)])
         self.dropout = nn.Dropout(cfg.dropout) if cfg.dropout > 0 else nn.Identity()
@@ -409,13 +537,28 @@ class UncertaintyBGNN(nn.Module):
 
     # ----- Core forward ---------------------------------------------------------------
 
-    def _forward_gnn(self, x: torch.Tensor, edge_index: torch.Tensor, sample: bool) -> torch.Tensor:
-        h = x
+    def _concat_lpe(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        if self.cfg.use_lpe <= 0:
+            return x
+        with torch.no_grad():
+            lpe = laplacian_positional_encodings(edge_index, x.shape[0], k=self.cfg.use_lpe)  # CPU
+        lpe = lpe.to(x.device, dtype=x.dtype)
+        return torch.cat([x, lpe], dim=-1)
+
+    def _forward_gnn(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        sample: bool,
+        edge_weight: Optional[torch.Tensor],
+        edge_attr: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        h = self._concat_lpe(x, edge_index)
         for li, layer in enumerate(self.gnn):
             if isinstance(layer, GCNLayerBayes):
-                h = layer(h, edge_index, sample=sample)
+                h = layer(h, edge_index, sample=sample, edge_weight=edge_weight, edge_attr=edge_attr)
             else:
-                h = layer(h, edge_index)
+                h = layer(h, edge_index, edge_weight=edge_weight, edge_attr=edge_attr)
             h = self.norms[li](h)
             h = self.dropout(h)
         return h
@@ -426,6 +569,8 @@ class UncertaintyBGNN(nn.Module):
         edge_index: torch.Tensor,
         sample: bool = True,
         return_embeddings: bool = True,
+        edge_weight: Optional[torch.Tensor] = None,
+        edge_attr: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Single stochastic forward pass (if sample=True) or deterministic (sample=False).
@@ -438,7 +583,7 @@ class UncertaintyBGNN(nn.Module):
         else:
             self.eval()
 
-        z = self._forward_gnn(x, edge_index, sample=sample)
+        z = self._forward_gnn(x, edge_index, sample=sample, edge_weight=edge_weight, edge_attr=edge_attr)
         out: Dict[str, torch.Tensor] = {}
         if return_embeddings:
             out["emb"] = z
@@ -475,38 +620,47 @@ class UncertaintyBGNN(nn.Module):
         edge_index: torch.Tensor,
         T: int = 30,
         reduce: bool = True,
+        edge_weight: Optional[torch.Tensor] = None,
+        edge_attr: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Run T stochastic passes and aggregate predictions.
 
         For classification:
-          Returns {"probs": [N, C], "probs_std": [N, C], "logits_mean": [N, C]}
+          Returns {
+            "probs": [N, C], "probs_std": [N, C], "logits_mean": [N, C],
+            "entropy": [N], "mutual_info": [N]
+          }
 
         For regression:
           Returns {"mu": [N, R], "std": [N, R], "aleatoric_std": [N, R], "epistemic_std": [N, R]}
-            where:
-              - total variance = epistemic_var + aleatoric_var
-              - aleatoric_var = mean(exp(log_var)) if enabled, else 0
-              - epistemic_var = var(μ) across samples
         """
         device = next(self.parameters()).device
-        preds = []
 
         if self.cfg.task == "classification":
+            P = []
             for _ in range(T):
-                out = self.forward(x, edge_index, sample=True, return_embeddings=False)
+                out = self.forward(x, edge_index, sample=True, return_embeddings=False, edge_weight=edge_weight, edge_attr=edge_attr)
                 probs = F.softmax(out["logits"], dim=-1)
-                preds.append(probs.unsqueeze(0))  # [1, N, C]
-            P = torch.cat(preds, dim=0)  # [T, N, C]
+                P.append(probs.unsqueeze(0))
+            P = torch.cat(P, dim=0)  # [T, N, C]
             probs_mean = P.mean(dim=0)
             probs_std = P.std(dim=0, unbiased=False)
             logits_mean = torch.log(torch.clamp(probs_mean, 1e-12, 1.0))
-            return {"probs": probs_mean, "probs_std": probs_std, "logits_mean": logits_mean}
+
+            # Predictive entropy H[p(y|x,D)]
+            entropy = (-probs_mean * torch.log(torch.clamp(probs_mean, 1e-12, 1.0))).sum(dim=-1)
+
+            # Mutual information: H[p] - E[H[p_t]]
+            ent_t = (-P * torch.log(torch.clamp(P, 1e-12, 1.0))).sum(dim=-1)  # [T, N]
+            mi = entropy - ent_t.mean(dim=0)
+
+            return {"probs": probs_mean, "probs_std": probs_std, "logits_mean": logits_mean, "entropy": entropy, "mutual_info": mi}
 
         # Regression
         mu_list, var_list = [], []
         for _ in range(T):
-            out = self.forward(x, edge_index, sample=True, return_embeddings=False)
+            out = self.forward(x, edge_index, sample=True, return_embeddings=False, edge_weight=edge_weight, edge_attr=edge_attr)
             mu_list.append(out["mu"].unsqueeze(0))  # [1, N, R]
             if self.logvar_head is not None and "log_var" in out:
                 var_list.append(torch.exp(torch.clamp(out["log_var"], min=-10.0, max=10.0)).unsqueeze(0))
@@ -543,9 +697,18 @@ class UncertaintyBGNN(nn.Module):
         model.load_state_dict(state)
         return model
 
+    # ----- Controls ------------------------------------------------------------------
+
+    def enable_deterministic_eval(self) -> None:
+        """
+        Turn off MC-dropout behavior and set eval() to deterministic (for validation/reporting).
+        """
+        self.cfg.mc_dropout = False
+        self.eval()
+
 
 # ======================================================================================
-# Losses & metrics
+# Losses, calibration & metrics
 # ======================================================================================
 
 def heteroscedastic_gaussian_nll(mu: torch.Tensor, y: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
@@ -577,9 +740,60 @@ def expected_calibration_error(probs: torch.Tensor, y_true: torch.Tensor, n_bins
         return ece
 
 
+def brier_score(probs: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+    """
+    Multi-class Brier score (lower is better).
+      probs: [N, C], y_true: [N] int labels
+    """
+    with torch.no_grad():
+        N, C = probs.shape
+        onehot = torch.zeros_like(probs).scatter_(1, y_true.view(-1, 1), 1.0)
+        return ((probs - onehot) ** 2).sum(dim=1).mean()
+
+
+class TemperatureScaler(nn.Module):
+    """
+    Post-hoc temperature scaling for classification logits.
+    Usage:
+        ts = TemperatureScaler().to(device)
+        # Fit: minimize NLL on validation logits/y
+        # Apply: probs = softmax(logits / T)
+    """
+    def __init__(self, init_T: float = 1.0):
+        super().__init__()
+        self.log_T = nn.Parameter(torch.tensor(float(math.log(init_T))))
+
+    def temperature(self) -> torch.Tensor:
+        return torch.exp(self.log_T)
+
+    def forward(self, logits: torch.Tensor) -> torch.Tensor:
+        T = self.temperature()
+        return logits / torch.clamp(T, min=1e-6)
+
+    def nll(self, logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        scaled = self.forward(logits)
+        return F.cross_entropy(scaled, y)
+
+
 # ======================================================================================
-# Training helpers (optional)
+# Training helpers (ELBO + β-annealing)
 # ======================================================================================
+
+class BetaAnnealer:
+    """
+    Simple β-annealing scheduler for KL term:
+      beta(t) = min_beta + (max_beta - min_beta) * sigmoid(k * (t - t0))
+    """
+    def __init__(self, min_beta: float = 0.0, max_beta: float = 1.0, k: float = 0.01, t0: float = 100.0):
+        self.min_beta = min_beta
+        self.max_beta = max_beta
+        self.k = k
+        self.t0 = t0
+
+    def __call__(self, step: int) -> float:
+        sig = 1.0 / (1.0 + math.exp(-self.k * (step - self.t0)))
+        return float(self.min_beta + (self.max_beta - self.min_beta) * sig)
+
 
 def elbo_loss_classification(
     model: UncertaintyBGNN,
@@ -588,14 +802,17 @@ def elbo_loss_classification(
     y: torch.Tensor,
     beta: float = 1.0,
     sample: bool = True,
+    edge_weight: Optional[torch.Tensor] = None,
+    edge_attr: Optional[torch.Tensor] = None,
+    class_weights: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     ELBO = NLL + β * KL
       - NLL: Cross-entropy on a single stochastic forward.
       - KL: sum of KL terms across Bayesian layers.
     """
-    out = model(x, edge_index, sample=sample, return_embeddings=False)
-    nll = F.cross_entropy(out["logits"], y)
+    out = model(x, edge_index, sample=sample, return_embeddings=False, edge_weight=edge_weight, edge_attr=edge_attr)
+    nll = F.cross_entropy(out["logits"], y, weight=class_weights)
     kl = model.kl_divergence()
     loss = nll + beta * kl
     return loss, {"nll": float(nll.item()), "kl": float(kl.item())}
@@ -608,12 +825,14 @@ def elbo_loss_regression(
     y: torch.Tensor,
     beta: float = 1.0,
     sample: bool = True,
+    edge_weight: Optional[torch.Tensor] = None,
+    edge_attr: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     ELBO = NLL + β * KL
       - NLL: Gaussian NLL with learned log variance if enabled, else MSE.
     """
-    out = model(x, edge_index, sample=sample, return_embeddings=False)
+    out = model(x, edge_index, sample=sample, return_embeddings=False, edge_weight=edge_weight, edge_attr=edge_attr)
     if "log_var" in out:
         nll = heteroscedastic_gaussian_nll(out["mu"], y, out["log_var"])
     else:
@@ -634,7 +853,7 @@ if __name__ == "__main__":
     # Synthetic graph
     N, D = 400, 16
     coords = torch.rand(N, 2)
-    edge_index = build_knn_graph(coords, k=6)
+    edge_index, edge_weight = build_knn_graph_with_weights(coords, k=6)
 
     # Node features & targets
     X = torch.randn(N, D)
@@ -649,23 +868,30 @@ if __name__ == "__main__":
         bayes_layers=True, prior_sigma=0.1,
         dropout=0.1, mc_dropout=True,
         task="classification", num_classes=2,
+        use_lpe=4, edge_feat_dim=0,  # demonstrate LPE use
         seed=7,
     )
     model_c = UncertaintyBGNN(cfg_c).to(device)
     opt = torch.optim.Adam(model_c.parameters(), lr=3e-3, weight_decay=1e-4)
+    beta_sched = BetaAnnealer(min_beta=0.0, max_beta=1e-3, k=0.05, t0=30.0)
 
     model_c.train()
-    for step in range(50):
+    for step in range(60):
         opt.zero_grad(set_to_none=True)
-        loss, logs = elbo_loss_classification(model_c, X, edge_index, y_cls, beta=1e-3, sample=True)
+        beta = beta_sched(step)
+        loss, logs = elbo_loss_classification(model_c, X, edge_index, y_cls, beta=beta, sample=True, edge_weight=edge_weight)
         loss.backward()
         opt.step()
-        if (step + 1) % 10 == 0:
+        if (step + 1) % 12 == 0:
             with torch.no_grad():
-                pmc = model_c.predict_mc(X, edge_index, T=30)
+                pmc = model_c.predict_mc(X, edge_index, T=30, edge_weight=edge_weight)
                 acc = (pmc["probs"].argmax(dim=1) == y_cls).float().mean().item()
                 ece = expected_calibration_error(pmc["probs"], y_cls, n_bins=15).item()
-            print(f"[cls step {step+1:03d}] loss={loss.item():.4f} nll={logs['nll']:.4f} kl={logs['kl']:.4f} acc={acc:.3f} ece={ece:.3f}")
+                br = brier_score(pmc["probs"], y_cls).item()
+                ent = pmc["entropy"].mean().item()
+                mi = pmc["mutual_info"].mean().item()
+            print(f"[cls step {step+1:03d}] loss={loss.item():.4f} nll={logs['nll']:.4f} kl={logs['kl']:.6f} "
+                  f"acc={acc:.3f} ece={ece:.3f} brier={br:.3f} H={ent:.3f} MI={mi:.3f}")
 
     # ---------------- Regression demo --------------------
     cfg_r = UncertaintyBGNNConfig(
@@ -673,31 +899,33 @@ if __name__ == "__main__":
         bayes_layers=True, prior_sigma=0.1,
         dropout=0.1, mc_dropout=True,
         task="regression", regression_targets=1, predict_log_var=True,
+        use_lpe=0, edge_feat_dim=0,
         seed=11,
     )
     model_r = UncertaintyBGNN(cfg_r).to(device)
     opt = torch.optim.Adam(model_r.parameters(), lr=3e-3, weight_decay=1e-4)
+    beta_sched = BetaAnnealer(min_beta=0.0, max_beta=1e-3, k=0.05, t0=40.0)
 
     model_r.train()
     for step in range(60):
         opt.zero_grad(set_to_none=True)
-        loss, logs = elbo_loss_regression(model_r, X, edge_index, y_reg, beta=1e-3, sample=True)
+        beta = beta_sched(step)
+        loss, logs = elbo_loss_regression(model_r, X, edge_index, y_reg, beta=beta, sample=True, edge_weight=edge_weight)
         loss.backward()
         opt.step()
         if (step + 1) % 12 == 0:
             with torch.no_grad():
-                pmc = model_r.predict_mc(X, edge_index, T=30)
+                pmc = model_r.predict_mc(X, edge_index, T=30, edge_weight=edge_weight)
                 rmse = torch.sqrt(F.mse_loss(pmc["mu"], y_reg)).item()
-                # Check uncertainty decomposition
                 estd = pmc["epistemic_std"].mean().item()
                 astd = pmc["aleatoric_std"].mean().item()
-            print(f"[reg step {step+1:03d}] loss={loss.item():.4f} nll={logs['nll']:.4f} kl={logs['kl']:.4f} rmse={rmse:.4f} epi_std={estd:.4f} alea_std={astd:.4f}")
+            print(f"[reg step {step+1:03d}] loss={loss.item():.4f} nll={logs['nll']:.4f} kl={logs['kl']:.6f} "
+                  f"rmse={rmse:.4f} epi_std={estd:.4f} alea_std={astd:.4f}")
 
     # ---------------- Save / Load smoke test -----------
     out_dir = "./_ubgnn_tmp"
     model_r.save(out_dir)
     reloaded = UncertaintyBGNN.load(out_dir)
     with torch.no_grad():
-        pmc2 = reloaded.predict_mc(X, edge_index, T=10)
+        pmc2 = reloaded.predict_mc(X, edge_index, T=10, edge_weight=edge_weight)
     print("Reload OK; μ shape:", tuple(pmc2["mu"].shape))
-```
