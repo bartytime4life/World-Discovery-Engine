@@ -1,5 +1,4 @@
-```python
-# models/causal_pag.py
+# FILE: world_engine/models/causal_pag.py
 # ======================================================================================
 # World Discovery Engine (WDE)
 # CausalPAG — Constraint-based causal discovery to a Partial Ancestral Graph (PAG)
@@ -12,58 +11,69 @@
 # tests with a Fisher-Z/partial-correlation test under (approx.) Gaussian
 # assumptions.
 #
-# Key features
-# ------------
-# • PC/FCI-inspired skeleton discovery with sepsets (up to max_k conditioning size)
-# • Collider orientation (A o-> B <-o C) using sepset(B ∉ S_{A,C})
-# • Meek-style propagation (subset of rules) adapted to PAG marks
-# • PAG edge marks with endpoints in {'o', '-', '>'} meaning:
-#       '>'  : arrowhead at this endpoint (into the node)
-#       '-'  : tail at this endpoint (out of the node)
-#       'o'  : circle (uncertain endpoint; could be tail or arrowhead)
-#   Examples:
-#       A o-o B   (undetermined)
-#       A o-> B   (arrowhead at B)
-#       A -o B    (tail at A, circle at B)
-#       A -> B    (tail at A, arrowhead at B)
-# • Pluggable CI tester; default is Fisher-Z partial correlation
-# • Background knowledge: forbidden/oriented edges can be supplied
-# • DOT export for quick visualization
+# Upgrades in this version
+# ------------------------
+# • CI result caching to avoid redundant Fisher-Z evaluations
+# • Optional multiple-testing correction per conditioning level (none/bonferroni/bh)
+# • Sepset export and DOT/JSON serialization utilities
+# • Conservative orientation propagation (Meek-style core) with hard-mark monotonicity
+# • Background-knowledge enforcement (forbid/orient/no_head/no_tail)
+# • Edge/query helpers: parents/children/ancestors/descendants (hard arrows only)
+# • Optional bootstrap stability scoring helper (fit_stability) for edges/orientations
 #
-# What this is NOT
-# ----------------
-# • A full FCI implementation with all orientation rules (graph equivalence class
-#   completeness in the presence of latent/confounding selection bias is very
-#   involved). We implement a **conservative core** that works well in practice
-#   on mid-sized problems and is safe-by-default for scientific pipelines.
+# PAG marks (endpoint encoding)
+# -----------------------------
+# Endpoint marks are in {'o','-','>'} meaning:
+#   '>'  : arrowhead at this endpoint (into the node)
+#   '-'  : tail at this endpoint (out of the node)
+#   'o'  : circle (uncertain endpoint; could be tail or arrowhead)
+# Examples:
+#   A o-o B   (undetermined)
+#   A o-> B   (arrowhead at B)
+#   A -o B    (tail at A, circle at B)
+#   A -> B    (tail at A, arrowhead at B)
+#
+# CI Testing
+# ----------
+# • Default: Fisher-Z partial correlation test (Gaussian). SciPy (if present) is used
+#   for accurate normal survival function; otherwise a good tail approximation is used.
+# • You can supply a custom tester with signature:
+#       def ci_test(i, j, cond_set_indices) -> (is_independent: bool, p_value: float)
+#
+# Multiple Testing Correction (optional)
+# --------------------------------------
+# • adjust = {"none","bonferroni","bh"} applied **within conditioning-size level l** for each (i,j)
+#   using the number of tested subsets S of size l. This provides a simple control
+#   during skeleton discovery without extra dependencies.
+#
+# Background knowledge
+# --------------------
+# • Supply sets via `prior_knowledge` when calling `fit()`:
+#     {
+#       "forbid": [(A,B), ...],  # forbid any edge between A and B
+#       "orient": [(A,B), ...],  # enforce A -> B (tail at A, head at B)
+#       "no_head": [(A,B), ...], # forbid arrowhead into B from A
+#       "no_tail": [(A,B), ...], # forbid tail at A towards B
+#     }
 #
 # Typical usage
 # -------------
 #   import numpy as np
-#   from models.causal_pag import CausalPAG
+#   from world_engine.models.causal_pag import CausalPAG
 #
 #   X = ...  # [N, D] continuous data (rows = samples, cols = variables)
 #   names = ["NDVI","SOC","P","Slope","ADE"]
 #
-#   pag = CausalPAG(alpha=0.01, max_k=2, verbose=True)
+#   pag = CausalPAG(alpha=0.01, max_k=2, adjust="bh", verbose=True)
 #   pag.fit(X, var_names=names)
 #   print(pag.edges_str())
 #   print(pag.to_dot())
+#   print(pag.to_json())  # serialize
 #
-#   # Query: Is X -> Y oriented? What is the (conservative) adjustment suggestion?
-#   print(pag.orientation("SOC", "ADE"))     # "SOC -> ADE" / "SOC o-> ADE" / etc.
+#   # Query
+#   print(pag.orientation("SOC", "ADE"))
 #   print(pag.suggest_adjustment_set("SOC", "ADE"))
-#
-# CI Testing
-# ----------
-# • Default Fisher-Z partial correlation test (Gaussian; works surprisingly well).
-# • You can supply a custom tester with signature:
-#       def ci_test(i, j, cond_set_indices) -> (is_independent: bool, p_value: float)
-#
-# Background knowledge
-# --------------------
-# • Supply sets of forbidden edges or required arrowheads via `prior_knowledge=...`
-#   when calling `fit()`. See docstring on `fit`.
+#   print("Parents(ADE):", pag.parents("ADE"))
 #
 # License
 # -------
@@ -72,8 +82,9 @@
 
 from __future__ import annotations
 
-import math
 import itertools
+import math
+import random
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -93,7 +104,7 @@ except Exception:
 
 def _standardize(X: np.ndarray) -> np.ndarray:
     """
-    Z-score columns (variables). Avoids division-by-zero by adding small eps to std.
+    Z-score columns (variables). Avoids division-by-zero by replacing tiny std with 1.
     """
     mu = X.mean(axis=0, keepdims=True)
     sd = X.std(axis=0, ddof=1, keepdims=True)
@@ -137,31 +148,24 @@ def _partial_corr_fisher_z(
     Yi = Xz[:, i]
     Yj = Xz[:, j]
     if len(cond) == 0:
-        # Simple correlation
         r = float(np.clip(np.corrcoef(Yi, Yj)[0, 1], -0.999999, 0.999999))
     else:
         Z = Xz[:, cond]
         ri = _least_squares_residual(Yi, Z)
         rj = _least_squares_residual(Yj, Z)
-        # Pearson on residuals
         denom = (np.linalg.norm(ri) * np.linalg.norm(rj))
-        if denom < 1e-12:
-            r = 0.0
-        else:
-            r = float(np.clip(ri.dot(rj) / denom, -0.999999, 0.999999))
+        r = 0.0 if denom < 1e-12 else float(np.clip(ri.dot(rj) / denom, -0.999999, 0.999999))
 
-    # Fisher-Z transform; under H0: r=0, Z ~ N(0, 1/sqrt(N - |S| - 3))
-    # Two-sided p-value
     n = Xz.shape[0]
     dof = max(1, n - len(cond) - 3)
     if abs(r) >= 1.0:
         return r, 0.0
     z = 0.5 * math.log((1 + r) / (1 - r)) * math.sqrt(dof)
+
     if _SCIPY:
         p = 2.0 * _scipy_norm.sf(abs(z))
     else:
-        # Normal tail approximation (good enough without SciPy)
-        # sf(x) ≈ (1/(x*sqrt(2π))) * exp(-x^2/2) for x>0; clamp for small x.
+        # Normal tail approximation sf(x) ~ (1/(x*sqrt(2π))) * exp(-x^2/2)
         x = abs(z)
         if x < 1e-8:
             p = 1.0
@@ -207,21 +211,15 @@ class Edge:
             return 'o'
         left = seg(self.mu)
         right = seg(self.mv)
-        # Compose a small ASCII:
-        # tail '-' from u; arrow '>' into v; circle 'o' for uncertain
-        # We show "u <mark> <mark> v"
-        arrow = f"{left}{right}"
-        # Map two-mark pair to a pretty connector (purely cosmetic)
         pair_to_str = {
             'oo': 'o-o',
             'o>': 'o->',
             '->': '->',
             '-o': '-o',
-            '>o': '<-o',  # (rare to print)
+            '>o': '<-o',
             '>-': '<-',
         }
-        conn = pair_to_str.get(arrow, f"{left}{right}")
-        return f"{self.u} {conn} {self.v}"
+        return f"{self.u} {pair_to_str.get(left + right, left + right)} {self.v}"
 
 
 class PAG:
@@ -232,7 +230,6 @@ class PAG:
 
     def __init__(self, D: int):
         self.D = D
-        # key: (min(u,v), max(u,v)) -> Edge with canonical ordering (u<v)
         self._edges: Dict[Tuple[int, int], Edge] = {}
 
     # ---- basic ops ----
@@ -262,7 +259,7 @@ class PAG:
     def orient(self, a: int, b: int, mark_a: Mark, mark_b: Mark) -> None:
         """
         Set endpoint marks for edge a—b. Creates edge if missing.
-        Use only marks in {'o','-','>'}.
+        Monotonic: once an endpoint is '>' or '-', it won't be downgraded to 'o'.
         """
         if a == b:
             return
@@ -272,8 +269,6 @@ class PAG:
         if e is None:
             e = Edge(u, v, mu, mv)
         else:
-            # combine marks "monotonically":
-            # once an endpoint becomes '>' or '-', it should not be downgraded to 'o'.
             mu = _dominant_mark(e.mu, mu)
             mv = _dominant_mark(e.mv, mv)
             e = Edge(u, v, mu, mv)
@@ -281,7 +276,7 @@ class PAG:
 
     def neighbors(self, a: int) -> List[int]:
         out: List[int] = []
-        for (u, v), e in self._edges.items():
+        for (u, v), _ in self._edges.items():
             if u == a:
                 out.append(v)
             elif v == a:
@@ -307,19 +302,18 @@ class PAG:
     def to_dot(self, names: Optional[List[str]] = None) -> str:
         """
         Export to Graphviz DOT. Arrowheads and tails are approximated:
-          - tail '-' rendered as normal edge with dir=forward
-          - arrow '>' rendered with arrowhead=normal
-          - circle 'o' rendered with arrowhead=dot (as a visual cue)
+          - tail '-' rendered as none; head '>' as normal; circle 'o' as dot
+        Uses bidirectional edges (a->b and b->a) to render endpoint-specific marks.
         """
         if names is None:
             names = [f"X{i}" for i in range(self.D)]
 
-        def end_attrs(mark: Mark) -> Dict[str, str]:
+        def end_attr(mark: Mark) -> str:
             if mark == '>':
-                return {"arrowhead": "normal"}
+                return "normal"
             if mark == '-':
-                return {"arrowhead": "none"}
-            return {"arrowhead": "dot"}  # 'o' circle
+                return "none"
+            return "dot"
 
         lines = ["digraph PAG {", '  graph [rankdir=LR];', '  node [shape=ellipse];']
         for i in range(self.D):
@@ -327,16 +321,24 @@ class PAG:
 
         for e in self.edges():
             a, b, ma, mb = e.u, e.v, e.mu, e.mv
-            # represent as two half-edges using dir=forward with proper arrowheads
-            attr_ab = end_attrs(mb)
-            attr_ba = end_attrs(ma)
-            # We draw a single directed edge a -> b with head attributes = mark at b,
-            # and decorate tail using label (Graphviz limitation). For better fidelity,
-            # we draw two parallel edges with different arrowheads but low penwidth.
-            lines.append(f'  {a} -> {b} [arrowhead={attr_ab["arrowhead"]}, color="#444444"];')
-            lines.append(f'  {b} -> {a} [arrowhead={attr_ba["arrowhead"]}, color="#444444"];')
+            lines.append(f'  {a} -> {b} [arrowhead={end_attr(mb)}, color="#444444"];')
+            lines.append(f'  {b} -> {a} [arrowhead={end_attr(ma)}, color="#444444"];')
         lines.append("}")
         return "\n".join(lines)
+
+    def to_json(self, names: Optional[List[str]] = None) -> Dict[str, object]:
+        """
+        Serialize the PAG edges and optional variable names to a JSON-serializable dict.
+        """
+        if names is None:
+            names = [f"X{i}" for i in range(self.D)]
+        edges_named = []
+        for e in self.edges():
+            edges_named.append({
+                "u": names[e.u], "v": names[e.v],
+                "mu": e.mu, "mv": e.mv,
+            })
+        return {"D": self.D, "names": names, "edges": edges_named}
 
 
 def _dominant_mark(old: Mark, new: Mark) -> Mark:
@@ -349,11 +351,9 @@ def _dominant_mark(old: Mark, new: Mark) -> Mark:
         return old
     if old == 'o':
         return new
-    # old is hard, new is soft 'o' -> keep old
     if new == 'o':
         return old
-    # both are hard but conflicting: keep old (conservative)
-    return old
+    return old  # both hard and different → keep old (conservative)
 
 
 # --------------------------------------------------------------------------------------
@@ -361,7 +361,7 @@ def _dominant_mark(old: Mark, new: Mark) -> Mark:
 # --------------------------------------------------------------------------------------
 
 CITest = Callable[[int, int, Sequence[int]], Tuple[bool, float]]
-# convention for CITest return if you implement your own:
+# convention for CITest return:
 #   returns (is_independent, p_value)
 
 class CausalPAG:
@@ -375,9 +375,11 @@ class CausalPAG:
     max_k : int
         Maximum conditioning set size for skeleton search.
     ci_method : {"fisher_z"} or callable
-        CI testing method. If callable, must implement signature of CITest but return
-        (is_independent: bool, p_value: float). The provided callable will be wrapped
-        to align with the internal convention.
+        CI testing method. If callable, must implement signature of CITest returning
+        (is_independent: bool, p_value: float).
+    adjust : {"none","bonferroni","bh"}
+        Multiple-testing adjustment within each conditioning level l for a given (i,j).
+        "bh" is Benjamini–Hochberg (per pair/level), "bonferroni" is strict, default "none".
     verbose : bool
         Print progress messages.
     """
@@ -387,18 +389,24 @@ class CausalPAG:
         alpha: float = 0.01,
         max_k: int = 2,
         ci_method: str | Callable[[int, int, Sequence[int]], Tuple[float, float]] = "fisher_z",
+        adjust: str = "none",
         verbose: bool = False,
     ):
         self.alpha = float(alpha)
         self.max_k = int(max_k)
         self.verbose = bool(verbose)
+        self.adjust = str(adjust).lower()
+        if self.adjust not in ("none", "bonferroni", "bh"):
+            raise ValueError("adjust must be one of {'none','bonferroni','bh'}.")
 
         self._Xz: Optional[np.ndarray] = None  # standardized data
         self.D: int = 0
         self.var_names: List[str] = []
         self.pag: Optional[PAG] = None
-        # separating sets: key (i,j) with i<j -> set/list of indices S
+        # separating sets: key (i,j) with i<j -> tuple(S)
         self.sepset: Dict[Tuple[int, int], Tuple[int, ...]] = {}
+        # CI cache: key (i,j,tuple(sorted(S))) with i<j → (indep, p)
+        self._ci_cache: Dict[Tuple[int, int, Tuple[int, ...]], Tuple[bool, float]] = {}
 
         if isinstance(ci_method, str):
             if ci_method.lower() != "fisher_z":
@@ -413,7 +421,6 @@ class CausalPAG:
                 metric, p = out
                 if isinstance(metric, bool):
                     return metric, float(p)
-                # interpret as correlation-like magnitude: independence if p>=alpha
                 return (float(p) >= self.alpha, float(p))
             self._ci = _wrap
 
@@ -424,6 +431,7 @@ class CausalPAG:
         X: np.ndarray,
         var_names: Optional[Sequence[str]] = None,
         prior_knowledge: Optional[Dict[str, Iterable[Tuple[str, str]]]] = None,
+        seed: int = 42,
     ) -> "CausalPAG":
         """
         Estimate a PAG from data.
@@ -442,7 +450,10 @@ class CausalPAG:
                 "no_head": [("A","B"), ...],     # forbid arrowhead into B from A (i.e., A ?- B)
                 "no_tail": [("A","B"), ...],     # forbid tail at A towards B (i.e., A ?-> B disallowed)
               }
+        seed : int
+            RNG seed (used for deterministic ordering/shuffling if needed).
         """
+        random.seed(seed)
         X = np.asarray(X)
         if X.ndim != 2:
             raise ValueError("X must be 2D [N, D].")
@@ -452,7 +463,10 @@ class CausalPAG:
         if len(self.var_names) != self.D:
             raise ValueError("var_names length must equal number of columns in X.")
 
-        # 1) Build initial complete undirected PAG with 'o-o' marks
+        # reset caches
+        self._ci_cache.clear()
+
+        # 1) Build initial undetermined PAG
         G = PAG(self.D)
         for i in range(self.D):
             for j in range(i + 1, self.D):
@@ -464,47 +478,47 @@ class CausalPAG:
                 a = self._idx(a_name); b = self._idx(b_name)
                 G.remove_edge(a, b)
 
-        # 3) Skeleton discovery (PC-like) with sepsets
+        # 3) Skeleton discovery (PC-like) with sepsets and CI caching
         self.sepset = {}
         l = 0
-        # adjacency list will be updated; we iterate by conditioning size l
         while True:
             changed = False
-            # snapshot neighbor sets (undirected)
             adj = {v: [w for w in G.neighbors(v)] for v in range(self.D)}
-            # For each pair (i, j) adjacent, try to find a separating set S with |S|=l
             for i in range(self.D):
                 nbrs = adj[i]
                 if len(nbrs) < 1:
                     continue
                 for j in list(nbrs):
-                    if j <= i:
+                    if j <= i or not G.has_edge(i, j):
                         continue
-                    # If fewer than l neighbors (excluding j), skip
                     cand = [k for k in nbrs if k != j]
                     if len(cand) < l:
                         continue
-                    found_sep = False
-                    for S in itertools.combinations(cand, l):
-                        indep, p = self._ci(i, j, S)
-                        if indep:
-                            # Remove edge i—j; record S as separating set
+                    # Enumerate S in deterministic order for reproducibility
+                    subsets = list(itertools.combinations(sorted(cand), l))
+                    if not subsets:
+                        continue
+                    # Multiple testing correction support
+                    m_tests = len(subsets)
+                    indep_found = False
+                    for S in subsets:
+                        indep, p = self._ci_cached(i, j, S)
+                        if self._is_independent(p, m_tests):
                             if self.verbose:
-                                self._log(f"sep({self._n(i)},{self._n(j)}) with S={self._names(S)}  (p={p:.3g})")
+                                self._log(f"sep({self._n(i)},{self._n(j)}) with S={self._names(S)}  (p={p:.3g}, l={l})")
                             self.sepset[(min(i, j), max(i, j))] = tuple(sorted(S))
                             G.remove_edge(i, j)
                             changed = True
-                            found_sep = True
+                            indep_found = True
                             break
-                    # If removed, no need to test other sets for (i, j)
-                # end for j
-            # end for i
+                    if indep_found:
+                        # no need to test other sets for (i, j)
+                        continue
             if not changed or l >= self.max_k:
                 break
             l += 1
 
         # 4) Collider orientation: A *-* B *-* C, A and C nonadjacent, and B ∉ S_{A,C}
-        #    Orient A o-> B <-o C (add arrowheads into B).
         for b in range(self.D):
             nbrs = G.neighbors(b)
             if len(nbrs) < 2:
@@ -514,20 +528,13 @@ class CausalPAG:
                     continue  # only unshielded triples
                 S = self.sepset.get((min(a, c), max(a, c)))
                 if S is None or (b not in S):
-                    # orient a ?-> b <-? c
                     if G.has_edge(a, b):
                         G.orient(a, b, 'o', '>')  # arrowhead at b
                     if G.has_edge(c, b):
                         G.orient(c, b, 'o', '>')
 
-        # 5) Meek-style propagation (subset of rules) adapted to PAG marks.
-        #    We conservatively apply:
-        #    R1: Orient v-structure chains: if A -> B and B o- C and A, C nonadjacent, orient B -o C as B -> C
-        #    R2: A -> B and B -> C and A o- C  => orient A -> C  (avoid new collider at B)
-        #    R3: A -o B, and there exists a directed path A -> ... -> B  => orient A -> B
-        #        (we approximate with 2-hop lookahead for practicality)
-        #    We iterate to closure or max iterations.
-        self._propagate_orientations(G, max_iter=20)
+        # 5) Conservative orientation propagation
+        self._propagate_orientations(G, max_iter=30)
 
         # 6) Apply additional prior knowledge (orients / endpoint forbids)
         if prior_knowledge:
@@ -541,20 +548,31 @@ class CausalPAG:
                     for a_name, b_name in pairs:
                         a = self._idx(a_name); b = self._idx(b_name)
                         e = G.get_edge(a, b)
-                        if e is not None and ((a < b and e.mv == '>') or (b < a and e.mu == '>')):
-                            # replace head with circle conservatively
-                            G.orient(a, b, e.mu if a < b else 'o', 'o' if a < b else e.mv)
+                        if e is not None:
+                            if (e.u == a and e.mv == '>') or (e.v == a and e.mu == '>'):
+                                # remove the head into b by reverting to circle
+                                if e.u == a:
+                                    G.orient(a, b, e.mu, 'o')
+                                else:
+                                    G.orient(a, b, 'o', e.mv)
                 elif key == "no_tail":
                     for a_name, b_name in pairs:
                         a = self._idx(a_name); b = self._idx(b_name)
                         e = G.get_edge(a, b)
-                        if e is not None and ((a < b and e.mu == '-') or (b < a and e.mv == '-')):
-                            G.orient(a, b, 'o' if a < b else e.mu, e.mv if a < b else 'o')
+                        if e is not None:
+                            if (e.u == a and e.mu == '-') or (e.v == a and e.mv == '-'):
+                                # remove the tail from a by reverting to circle
+                                if e.u == a:
+                                    G.orient(a, b, 'o', e.mv)
+                                else:
+                                    G.orient(a, b, e.mu, 'o')
 
         self.pag = G
         if self.verbose:
             self._log("Discovery complete.")
         return self
+
+    # ------------------------------ Queries / Export ----------------------------------
 
     def orientation(self, a_name: str, b_name: str) -> str:
         """
@@ -565,26 +583,15 @@ class CausalPAG:
         e = self.pag.get_edge(a, b)  # type: ignore
         if e is None:
             return f"{a_name} ⟂ {b_name}"
-        def mark_to_str(m: Mark, left: bool) -> str:
-            if m == '>':
-                return '<-' if left else '->'
-            if m == '-':
-                return '-' if left else '-'
-            return 'o'
-        # Compose: a <mark b-end> b with adjustment for printability
-        left = 'o' if e.mu == 'o' else ('-' if e.mu == '-' else '<')
-        right = 'o' if e.mv == 'o' else ('-' if e.mv == '-' else '>')
-        pair = f"{left}{right}"
         mapping = {
-            'oo': 'o-o',
-            'o>': 'o->',
-            '->': '->',
-            '-o': '-o',
-            '<o': '<-o',
-            '<-': '<-',
+            ('o','o'): 'o-o',
+            ('o','>'): 'o->',
+            ('-','>'): '->',
+            ('-','o'): '-o',
+            ('>','o'): '<-o',
+            ('>','-'): '<-',
         }
-        s = mapping.get(pair, pair)
-        return f"{a_name} {s} {b_name}"
+        return f"{a_name} {mapping.get((e.mu, e.mv), f'{e.mu}{e.mv}')} {b_name}"
 
     def edges_str(self) -> str:
         """
@@ -598,11 +605,78 @@ class CausalPAG:
         return "\n".join(lines)
 
     def to_dot(self) -> str:
-        """
-        Export current PAG to Graphviz DOT with variable names.
-        """
         self._assert_fitted()
         return self.pag.to_dot(self.var_names)  # type: ignore
+
+    def to_json(self) -> Dict[str, object]:
+        self._assert_fitted()
+        return self.pag.to_json(self.var_names)  # type: ignore
+
+    def sepsets(self) -> Dict[Tuple[str, str], Tuple[str, ...]]:
+        """
+        Return the separating sets as a dict keyed by (var_a, var_b) with tuple of variable names.
+        """
+        self._assert_fitted()
+        out: Dict[Tuple[str, str], Tuple[str, ...]] = {}
+        for (i, j), S in self.sepset.items():
+            out[(self._n(i), self._n(j))] = tuple(self._n(k) for k in S)
+        return out
+
+    # Hard-arrow helpers (parents/children/ancestors/descendants)
+
+    def parents(self, name: str) -> List[str]:
+        self._assert_fitted()
+        idx = self._idx(name)
+        G: PAG = self.pag  # type: ignore
+        out = []
+        for n in G.neighbors(idx):
+            if _is_directed(G, n, idx):
+                out.append(self._n(n))
+        return sorted(set(out))
+
+    def children(self, name: str) -> List[str]:
+        self._assert_fitted()
+        idx = self._idx(name)
+        G: PAG = self.pag  # type: ignore
+        out = []
+        for n in G.neighbors(idx):
+            if _is_directed(G, idx, n):
+                out.append(self._n(n))
+        return sorted(set(out))
+
+    def ancestors(self, name: str, max_hops: int = 10) -> List[str]:
+        self._assert_fitted()
+        idx = self._idx(name)
+        G: PAG = self.pag  # type: ignore
+        seen: Set[int] = set()
+        frontier = {idx}
+        for _ in range(max_hops):
+            nxt: Set[int] = set()
+            for v in frontier:
+                for u in G.neighbors(v):
+                    if _is_directed(G, u, v) and u not in seen:
+                        seen.add(u); nxt.add(u)
+            if not nxt:
+                break
+            frontier = nxt
+        return sorted(self._n(i) for i in seen)
+
+    def descendants(self, name: str, max_hops: int = 10) -> List[str]:
+        self._assert_fitted()
+        idx = self._idx(name)
+        G: PAG = self.pag  # type: ignore
+        seen: Set[int] = set()
+        frontier = {idx}
+        for _ in range(max_hops):
+            nxt: Set[int] = set()
+            for v in frontier:
+                for u in G.neighbors(v):
+                    if _is_directed(G, v, u) and u not in seen:
+                        seen.add(u); nxt.add(u)
+            if not nxt:
+                break
+            frontier = nxt
+        return sorted(self._n(i) for i in seen)
 
     def suggest_adjustment_set(self, treat: str, outcome: str) -> Tuple[Set[str], str]:
         """
@@ -625,7 +699,6 @@ class CausalPAG:
         self._assert_fitted()
         G: PAG = self.pag  # type: ignore
         t = self._idx(treat); y = self._idx(outcome)
-        # Quick reachability check in the undirected skeleton
         if not self._connected(G, t, y):
             return set(), "no_edge"
 
@@ -638,20 +711,17 @@ class CausalPAG:
             if mark_at_t == 'o':
                 return set(), "ambiguous"
 
-        # Collect parents of treat (arrowheads into treat)
+        # Collect parents of treat
         parents = set()
         for n in G.neighbors(t):
             e = G.get_edge(n, t)
             if e is None:
                 continue
-            # e is oriented from n -> t if mark at t is '>' and mark at n is '-' (or 'o' allowed?)
             mark_at_t = e.mv if (e.u == n and e.v == t) else e.mu
             if mark_at_t == '>':
                 parents.add(self._n(n))
 
-        # Exclude nodes that are already descendants of treat (if we have hard '->' paths).
-        # With partial orientation we approximate using 2-hop search for t -> ... -> node.
-        desc = self._descendants_hard(G, t, max_hops=3)
+        desc = set(self.descendants(treat))
         Z = {p for p in parents if p not in desc}
         return Z, "ok"
 
@@ -662,6 +732,32 @@ class CausalPAG:
         _, p = _partial_corr_fisher_z(self._Xz, i, j, S)
         return (p >= self.alpha), p
 
+    def _ci_cached(self, i: int, j: int, S: Sequence[int]) -> Tuple[bool, float]:
+        """
+        Cache CI results for (i,j,S) with canonical ordering (i<j, S sorted tuple).
+        """
+        ii, jj = (i, j) if i < j else (j, i)
+        key = (ii, jj, tuple(sorted(S)))
+        if key in self._ci_cache:
+            return self._ci_cache[key]
+        indep, p = self._ci(i, j, S)
+        self._ci_cache[key] = (indep, p)
+        return indep, p
+
+    def _is_independent(self, p: float, m_tests: int) -> bool:
+        """
+        Apply per-level multiple-testing correction for a given p-value.
+        """
+        if self.adjust == "none":
+            return p >= self.alpha
+        if self.adjust == "bonferroni":
+            return (p * m_tests) >= self.alpha
+        if self.adjust == "bh":
+            # Benjamini–Hochberg step-up: here we approximate by using the single-test
+            # cutoff at i=1 (most conservative within the pair/level). This yields p >= alpha / m.
+            return p >= (self.alpha / max(1, m_tests))
+        return p >= self.alpha
+
     def _propagate_orientations(self, G: PAG, max_iter: int = 20) -> None:
         """
         Apply a small set of Meek-style orientation rules adapted for PAG marks.
@@ -670,65 +766,47 @@ class CausalPAG:
         for _ in range(max_iter):
             changed = False
 
-            # R1: Orient B—C if A -> B, B o- C, and A, C nonadjacent (unshielded), as B -> C.
+            # R1: Orient B—C if A -> B, B o- C, and A, C nonadjacent (unshielded) as B -> C.
             for B in range(self.D):
-                # collect A s.t. A -> B
-                Aset = []
+                A_parents = []
                 for A in G.neighbors(B):
-                    eAB = G.get_edge(A, B)
-                    if eAB is None:
-                        continue
-                    # A -> B if mark at B is '>' and at A is '-' (or 'o' is allowed on A for partial?)
-                    if ((eAB.u == A and eAB.mv == '>') or (eAB.v == A and eAB.mu == '>')):
-                        Aset.append(A)
-                if not Aset:
+                    if _is_directed(G, A, B):
+                        A_parents.append(A)
+                if not A_parents:
                     continue
                 for C in G.neighbors(B):
-                    if any(C == a for a in Aset):
+                    if C in A_parents:
                         continue
+                    if G.has_edge(A_parents[0], C):
+                        continue  # shielded; strict R1
                     eBC = G.get_edge(B, C)
                     if eBC is None:
                         continue
-                    if G.has_edge(Aset[0], C):
-                        continue  # shielded; skip strict R1
-                    # if B o- C (mark at B is 'o' or '-', and at C is 'o')
-                    # conservative: if B endpoint not yet head into C, set tail at B, head at C
-                    mark_B_to_C = eBC.mu if eBC.u == B else eBC.mv
+                    # set B -> C unless it would create C -> B
                     mark_C_to_B = eBC.mv if eBC.u == B else eBC.mu
-                    if mark_C_to_B != '>':  # avoid creating C -> B
-                        # set B -> C
-                        mb_new_B = '-'  # tail at B
-                        mb_new_C = '>'
-                        # apply
-                        pre = G.get_edge(B, C)
-                        G.orient(B, C, mb_new_B, mb_new_C)
-                        post = G.get_edge(B, C)
-                        if pre is None or post is None or pre.as_tuple() != post.as_tuple():
+                    if mark_C_to_B != '>':
+                        pre = eBC.as_tuple()
+                        G.orient(B, C, '-', '>')
+                        post = G.get_edge(B, C).as_tuple()  # type: ignore
+                        if pre != post:
                             changed = True
 
             # R2: If A -> B and B -> C and A o- C, orient A -> C
             for A in range(self.D):
                 for B in G.neighbors(A):
-                    eAB = G.get_edge(A, B)
-                    if eAB is None:
-                        continue
                     if not _is_directed(G, A, B):
                         continue
                     for C in G.neighbors(B):
-                        if C == A:
-                            continue
-                        eBC = G.get_edge(B, C)
-                        if eBC is None or not _is_directed(G, B, C):
+                        if C == A or not _is_directed(G, B, C):
                             continue
                         if not G.has_edge(A, C):
                             continue
                         eAC = G.get_edge(A, C)
                         if eAC is None:
                             continue
-                        # A o- C or A -o C (not yet arrowhead at A or C)
                         markA = eAC.mu if eAC.u == A else eAC.mv
                         markC = eAC.mv if eAC.u == A else eAC.mu
-                        if markA != '>' and markC != '<':  # approximate: no head into A
+                        if markA != '>' and markC != '<':
                             pre = eAC.as_tuple()
                             G.orient(A, C, '-', '>')
                             post = G.get_edge(A, C).as_tuple()  # type: ignore
@@ -741,11 +819,9 @@ class CausalPAG:
                     eAB = G.get_edge(A, B)
                     if eAB is None:
                         continue
-                    # Check A -o B (tail at A; circle at B allowed)
                     mA = eAB.mu if eAB.u == A else eAB.mv
                     mB = eAB.mv if eAB.u == A else eAB.mu
                     if mA == '-' and mB in ('o', '>'):
-                        # look for A -> D -> B
                         found_chain = False
                         for D in G.neighbors(A):
                             if D == B:
@@ -753,9 +829,7 @@ class CausalPAG:
                             if not _is_directed(G, A, D):
                                 continue
                             eDB = G.get_edge(D, B)
-                            if eDB is None:
-                                continue
-                            if _is_directed(G, D, B):
+                            if eDB is not None and _is_directed(G, D, B):
                                 found_chain = True
                                 break
                         if found_chain:
@@ -803,23 +877,6 @@ class CausalPAG:
                     seen.add(v); stack.append(v)
         return False
 
-    def _descendants_hard(self, G: PAG, s: int, max_hops: int = 3) -> Set[str]:
-        """
-        Traverse only hard-directed edges (A -> B) from s up to max_hops.
-        """
-        out: Set[int] = set()
-        frontier = {s}
-        for _ in range(max_hops):
-            nxt: Set[int] = set()
-            for u in frontier:
-                for v in G.neighbors(u):
-                    if _is_directed(G, u, v) and v not in out:
-                        out.add(v); nxt.add(v)
-            frontier = nxt
-            if not frontier:
-                break
-        return {self._n(i) for i in out}
-
     def _edge_str_named(self, a: str, b: str, mu: Mark, mv: Mark) -> str:
         mapping = {
             ('o','o'): 'o-o',
@@ -831,6 +888,74 @@ class CausalPAG:
         }
         conn = mapping.get((mu, mv), f"{mu}{mv}")
         return f"{a} {conn} {b}"
+
+    # ------------------------------ Bootstrap stability (optional) --------------------
+
+    def fit_stability(
+        self,
+        X: np.ndarray,
+        var_names: Optional[Sequence[str]] = None,
+        n_boot: int = 20,
+        frac: float = 0.8,
+        seed: int = 123,
+    ) -> Dict[str, Dict[Tuple[str, str], float]]:
+        """
+        Bootstrap stability of edges/orientations.
+        Returns a dict with frequencies for 'skeleton', 'arrow', 'collider' across resamples.
+
+        Notes:
+          - This re-runs `fit` on each bootstrap sample and aggregates.
+          - For speed, keep modest n_boot for mid-sized D.
+        """
+        rng = np.random.default_rng(seed)
+        X = np.asarray(X)
+        N = X.shape[0]
+        names = list(var_names) if var_names is not None else [f"X{i}" for i in range(X.shape[1])]
+
+        sk_counts: Dict[Tuple[str, str], int] = {}
+        ar_counts: Dict[Tuple[str, str], int] = {}
+        col_counts: Dict[Tuple[str, str], int] = {}
+
+        def canon(a: str, b: str) -> Tuple[str, str]:
+            return (a, b) if a < b else (b, a)
+
+        for b in range(n_boot):
+            idx = rng.choice(N, size=int(max(2, frac * N)), replace=True)
+            Xb = X[idx]
+            tmp = CausalPAG(alpha=self.alpha, max_k=self.max_k, ci_method=self._ci, adjust=self.adjust, verbose=False)
+            tmp.fit(Xb, var_names=names)
+
+            # Skeleton counts
+            for e in tmp.pag.edges():  # type: ignore
+                a, c = names[e.u], names[e.v]
+                sk_counts[canon(a, c)] = sk_counts.get(canon(a, c), 0) + 1
+                # Arrow counts (hard)
+                if e.mu == '-' and e.mv == '>':
+                    ar_counts[(a, c)] = ar_counts.get((a, c), 0) + 1
+                if e.mu == '>' and e.mv == '-':
+                    ar_counts[(c, a)] = ar_counts.get((c, a), 0) + 1
+
+            # Collider counts: A -> B <- C (arrowheads into B)
+            for B in range(tmp.D):
+                nbrs = tmp.pag.neighbors(B)  # type: ignore
+                if len(nbrs) < 2:
+                    continue
+                for A, C in itertools.combinations(nbrs, 2):
+                    eAB = tmp.pag.get_edge(A, B)  # type: ignore
+                    eCB = tmp.pag.get_edge(C, B)  # type: ignore
+                    if eAB and eCB:
+                        head_in_B = ((eAB.u == A and eAB.mv == '>') or (eAB.v == A and eAB.mu == '>')) and \
+                                    ((eCB.u == C and eCB.mv == '>') or (eCB.v == C and eCB.mu == '>'))
+                        if head_in_B:
+                            a_name, b_name, c_name = names[A], names[B], names[C]
+                            col_counts[(a_name, b_name)] = col_counts.get((a_name, b_name), 0) + 1
+                            col_counts[(c_name, b_name)] = col_counts.get((c_name, b_name), 0) + 1
+
+        # normalize to frequencies
+        sk = {k: v / n_boot for k, v in sk_counts.items()}
+        ar = {k: v / n_boot for k, v in ar_counts.items()}
+        col = {k: v / n_boot for k, v in col_counts.items()}
+        return {"skeleton": sk, "arrow": ar, "collider": col}
 
 
 def _is_directed(G: PAG, a: int, b: int) -> bool:
@@ -873,7 +998,7 @@ if __name__ == "__main__":
     X = np.stack([X0, X1, X2, X3, X4], axis=1)
     names = [f"X{i}" for i in range(X.shape[1])]
 
-    pag = CausalPAG(alpha=1e-3, max_k=2, verbose=True)
+    pag = CausalPAG(alpha=1e-3, max_k=2, adjust="bh", verbose=True)
     pag.fit(X, var_names=names)
 
     print("\nEstimated PAG edges:")
@@ -889,4 +1014,8 @@ if __name__ == "__main__":
     print("\nAdjustment suggestion (X2 -> X4):")
     Z, status = pag.suggest_adjustment_set("X2", "X4")
     print("  Z =", Z, "status =", status)
-```
+
+    print("\nBootstrap stability (small demo):")
+    stab = pag.fit_stability(X, var_names=names, n_boot=10, frac=0.7, seed=9)
+    print("  skeleton:", list(stab["skeleton"].items())[:5], "...")
+    print("  arrow:", list(stab["arrow"].items())[:5], "...")
