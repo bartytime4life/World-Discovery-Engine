@@ -1,41 +1,61 @@
-🌍 World Discovery Engine (WDE)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/wde_banner_dark.svg">
+    <img src="assets/wde_banner_light.svg" alt="World Discovery Engine Banner" width="100%">
+  </picture>
+</p>
 
-OpenAI → Z Challenge · Archaeology & Earth Systems
+# 🌍 World Discovery Engine (WDE)
 
-⸻
+**OpenAI → Z Challenge · Archaeology & Earth Systems**
 
-📌 Overview
+[![Kaggle](https://img.shields.io/badge/Kaggle-OpenAI→Z%20Challenge-20BEFF?logo=kaggle&logoColor=white)](https://www.kaggle.com/competitions/openai-to-z-challenge)
+[![CI](https://github.com/<your-org>/world-discovery-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-org>/world-discovery-engine/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/Docs-Architecture-blueviolet?logo=readthedocs&logoColor=white)](docs/architecture.md)
 
-The World Discovery Engine (WDE) is a multi-modal AI pipeline for discovering archaeologically significant landscapes across the Amazon and beyond.
+[![Python](https://img.shields.io/badge/Python-3.10%20|%203.11%20|%203.12-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![DVC](https://img.shields.io/badge/DVC-tracked-945DD6?logo=dvc&logoColor=white)](https://dvc.org/)
+[![Contributions](https://img.shields.io/badge/Contributions-welcome-orange.svg)](docs/contributing.md)
 
-It fuses satellite imagery, radar, LiDAR, soils & vegetation maps, hydrology layers, historical archives, and core sampling data into a reproducible system that outputs candidate site dossiers — combining quantitative evidence with interpretive narrative.
+---
+
+## 📌 Overview
+
+The **World Discovery Engine (WDE)** is a **multi-modal AI pipeline** for discovering archaeologically significant landscapes across the Amazon and beyond.
+
+It fuses **satellite imagery, radar, LiDAR, soils & vegetation maps, hydrology layers, historical archives, and core sampling data** into a reproducible system that outputs **candidate site dossiers** — combining quantitative evidence with interpretive narrative.
 
 Each dossier integrates:
-	•	📡 Multi-sensor overlays (Sentinel, Landsat, SAR, LiDAR)
-	•	🌱 Soil & vegetation fingerprints (ADE / terra preta indicators)
-	•	📜 Historical concordance (archival maps, expedition diaries, site DBs)
-	•	🔗 Causal plausibility graphs (Partial Ancestral Graphs from FCI inference)
-	•	🎲 Uncertainty quantification (Bayesian GNN ensembles + calibrated scores)
-	•	🧪 Simulation & counterfactuals (SSIM falsification tests)
 
-WDE is designed to run entirely on Kaggle infrastructure (GPU optional, CPU fallback) with open / CC-0 datasets only, ensuring transparent reproducibility.
+- 📡 **Multi-sensor overlays** (Sentinel, Landsat, SAR, LiDAR)  
+- 🌱 **Soil & vegetation fingerprints** (ADE / terra preta indicators)  
+- 📜 **Historical concordance** (archival maps, expedition diaries, site DBs)  
+- 🔗 **Causal plausibility graphs** (Partial Ancestral Graphs from FCI inference)  
+- 🎲 **Uncertainty quantification** (Bayesian GNN ensembles + calibrated scores)  
+- 🧪 **Simulation & counterfactuals** (SSIM falsification tests)  
 
-⸻
+WDE runs **entirely on Kaggle** (GPU optional, CPU fallback) with **open / CC-0 datasets only**, ensuring **transparent reproducibility**.
 
-🏆 Challenge Context
+---
 
-Built for the OpenAI → Z Challenge, WDE satisfies all rubric pillars:
-	•	✅ Open/CC-0 data only, with ≥2 independent modalities per finding
-	•	✅ Archaeological impact focus — ADEs, geoglyphs, settlement networks, ancient hydrological engineering
-	•	✅ Single Kaggle Notebook deliverable (notebooks/ade_discovery_pipeline.ipynb)
-	•	✅ Reproducible outputs with deterministic configs & audit logs
+## 🏆 Challenge Context
 
-🧭 Key metric: The rubric prioritizes plausibility & significance of discoveries, not raw anomaly counts.
+Built for the **OpenAI → Z Challenge**, WDE satisfies all rubric pillars:
 
-⸻
+- ✅ **Open/CC-0 data only**, with ≥2 independent modalities per finding  
+- ✅ **Archaeological impact focus** — ADEs, geoglyphs, settlement networks, ancient hydrological engineering  
+- ✅ **Single Kaggle Notebook deliverable** (`notebooks/ade_discovery_pipeline.ipynb`)  
+- ✅ **Reproducible outputs** with deterministic configs & audit logs  
 
-🔬 Pipeline Stages — The Discovery Funnel
+> 🧭 **Key metric:** The rubric prioritizes *plausibility & significance of discoveries*, not raw anomaly counts.
 
+---
+
+## 🔬 Pipeline Stages — The Discovery Funnel
+
+```mermaid
 flowchart LR
   classDef stage fill:#0ea5e9,stroke:#0369a1,color:#fff,rx:14,ry:14;
   A[Tiling & Ingestion]:::stage --> B[Coarse Scan]:::stage --> C[Mid-Scale Evaluation]:::stage --> D[Verification & Fusion]:::stage --> E[Report & Dossiers]:::stage
@@ -208,6 +228,22 @@ The docs/ folder contains:
 
 ⸻
 
-✨ WDE transforms open geospatial chaos into archaeological insight — reproducible, ethical, and scientifically defensible.
+🏁 Project Footer
+
+██████╗ ██╗   ██╗███████╗
+██╔══██╗██║   ██║██╔════╝
+██████╔╝██║   ██║███████╗
+██╔═══╝ ██║   ██║╚════██║
+██║     ╚██████╔╝███████║
+╚═╝      ╚═════╝ ╚══════╝
+
+🌍 World Discovery Engine (WDE) · OpenAI → Z Challenge
+📖 Docs · 🛠️ Issues · 💬 Discussions · ⚙️ CI/CD
+
+Made with ❤️ by the WDE Team · Contributions welcome
 
 ⸻
+
+✨ WDE transforms open geospatial chaos into archaeological insight — reproducible, ethical, and scientifically defensible.
+
+---
