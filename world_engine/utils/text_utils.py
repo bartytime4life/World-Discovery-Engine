@@ -1,21 +1,26 @@
 # world_engine/utils/text_utils.py
 # ======================================================================================
 # World Discovery Engine (WDE)
-# Text Utilities — OCR, cleaning, entity & coordinate extraction, gazetteer matching
+# Text Utilities — OCR, cleaning, tokenization, entity & coordinate extraction,
+#                  gazetteer matching, context windows, and redaction helpers
 # --------------------------------------------------------------------------------------
 # Purpose
 #   Self-contained, Kaggle-friendly text utilities with optional dependencies and robust
 #   fallbacks. Supports:
 #     • OCR for images (and PDFs if pdf2image available)
-#     • Text normalization & cleaning
+#     • Text normalization & cleaning (whitespace, punctuation, accents)
+#     • Lightweight tokenization & sentence splitting (regex-based, Unicode-aware)
 #     • Keyword/keyphrase extraction (lightweight RAKE-like scoring)
-#     • Simple NER-lite: dates, coordinates (DMS/decimal), hydrologic terms, place-like tokens
-#     • Gazetteer name matching (exact + fuzzy via difflib)
+#     • NER-lite: dates, coordinates (DMS/decimal/loose-DMS), hydro terms, toponyms
+#     • Gazetteer name matching (exact + fuzzy via difflib), with span/context windows
+#     • Context-window extraction around hits (e.g., for dossier snippets)
+#     • Coordinate rounding/redaction for ethical release masks
 #
 # Design notes
 #   • Optional deps (pytesseract, pillow, pdf2image, spacy). Gracefully degrade if missing.
 #   • No network calls. Deterministic and unit-testable.
 #   • Minimal global state. All functions are pure or locally seeded where needed.
+#   • Avoid heavy NLP stacks unless user opts in (spaCy optional).
 #
 # License
 #   MIT (c) 2025 World Discovery Engine contributors
@@ -60,17 +65,31 @@ except Exception:
 
 
 __all__ = [
+    # OCR
     "ocr_image",
     "ocr_pdf",
+    # Cleaning / normalization
     "clean_text",
     "normalize_whitespace",
     "strip_accents",
+    "normalize_quotes",
+    # Tokenization / sentences
+    "simple_tokens",
+    "split_sentences",
+    "split_paragraphs",
+    # Keywords
     "simple_keywords",
+    # Entities
     "extract_entities",
     "parse_coordinates",
     "toponym_candidates",
-    "match_gazetteer",
     "TextEntityResult",
+    # Gazetteer
+    "match_gazetteer",
+    # Context & redaction
+    "extract_context_windows",
+    "round_coordinates",
+    "redact_coordinates",
 ]
 
 
@@ -98,7 +117,7 @@ _HYDRO_TERMS = {
     "estuario", "mouth", "tributary", "furos", "igarapés",
 }
 
-# Date patterns (very basic)
+# Basic date patterns (YYYY, dd/mm/yyyy, dd Mon yyyy)
 _DATE_PAT = re.compile(
     r"\b(?:(?:19|20)\d{2}|(?:\d{1,2}[/.\-]\d{1,2}[/.\-](?:19|20)?\d{2})|(?:\d{1,2}\s+[A-Za-z]{3,9}\s+(?:19|20)\d{2}))\b"
 )
@@ -108,18 +127,39 @@ _DEC_COORD_PAT = re.compile(
     r"(?P<lat>[+-]?\d{1,2}(?:\.\d+)?)[,\s]+(?P<lon>[+-]?\d{1,3}(?:\.\d+)?)"
 )
 
-# DMS coordinate fragments (e.g., 03°27'22"S 060°30'45"W)
-_DMS_FRAGMENT = r"(\d{1,3})[°:\s]+(\d{1,2})['’:\s]+(\d{1,2}(?:\.\d+)?)[\"”]?"
+# DMS coordinate (strict; e.g., 03°27'22"S, 060°30'45"W)
 _DMS_PAT = re.compile(
-    rf"(?P<lat_deg>\d{{1,2}})[°:\s]+(?P<lat_min>\d{{1,2}})['’:\s]+(?P<lat_sec>\d{{1,2}}(?:\.\d+)?)"
+    r"(?P<lat_deg>\d{1,2})[°:\s]+(?P<lat_min>\d{1,2})['’:\s]+(?P<lat_sec>\d{1,2}(?:\.\d+)?)"
     r"[\"”]?\s*(?P<lat_dir>[NS])[,;\s]+"
-    rf"(?P<lon_deg>\d{{1,3}})[°:\s]+(?P<lon_min>\d{{1,2}})['’:\s]+(?P<lon_sec>\d{{1,2}}(?:\.\d+)?)"
+    r"(?P<lon_deg>\d{1,3})[°:\s]+(?P<lon_min>\d{1,2})['’:\s]+(?P<lon_sec>\d{1,2}(?:\.\d+)?)"
     r"[\"”]?\s*(?P<lon_dir>[EW])",
     re.IGNORECASE,
 )
 
-# Title-case detector for toponyms (greedy but practical)
-_TOPONYM_PAT = re.compile(r"\b([A-ZÁÂÃÀÇÉÊÍÓÔÕÚÜ][a-záâãàçéêíóôõúü]+(?:[ -][A-ZÁÂÃÀÇÉÊÍÓÔÕÚÜ][a-záâãàçéêíóôõúü]+)*)\b")
+# Loose DMS (space-separated, punctuation-agnostic): 03 27 22 S 060 30 45 W
+_LOOSE_DMS_PAT = re.compile(
+    r"(?P<lat_deg>\d{1,2})\s+(?P<lat_min>\d{1,2})\s+(?P<lat_sec>\d{1,2}(?:\.\d+)?)\s*(?P<lat_dir>[NS])[,;\s]+"
+    r"(?P<lon_deg>\d{1,3})\s+(?P<lon_min>\d{1,2})\s+(?P<lon_sec>\d{1,2}(?:\.\d+)?)\s*(?P<lon_dir>[EW])",
+    re.IGNORECASE,
+)
+
+# Title-case detector for toponyms (greedy but practical; captures "Rio Negro", "São Gabriel")
+_TOPONYM_PAT = re.compile(
+    r"\b([A-ZÁÂÃÀÇÉÊÍÓÔÕÚÜ][a-záâãàçéêíóôõúü]+(?:[ -][A-ZÁÂÃÀÇÉÊÍÓÔÕÚÜ][a-záâãàçéêíóôõúü]+)*)\b"
+)
+
+# Sentence boundaries (very lightweight; avoids splitting on common abbreviations)
+_SENT_PAT = re.compile(
+    r"(?<!\b[A-Z][a-z])(?<=[.!?])\s+(?=[A-ZÁÂÃÀÇÉÊÍÓÔÕÚÜ])"
+)
+
+# Smart quotes and dashes normalization map
+_PUNC_MAP = {
+    "\u2018": "'", "\u2019": "'", "\u201A": "'", "\u201B": "'",
+    "\u201C": '"', "\u201D": '"', "\u201E": '"', "\u201F": '"',
+    "\u2013": "-", "\u2014": "-", "\u2212": "-",  # en/em dash, minus
+}
+
 
 # --------------------------------------------------------------------------------------
 # Data Classes
@@ -177,7 +217,7 @@ def ocr_image(
         if psm is not None:
             config = f"--psm {psm}"
         txt = pytesseract.image_to_string(im, lang=lang, config=config)
-        return unicodedata.normalize("NFC", txt or "")
+        return unicodedata.normalize("NFC", normalize_quotes(txt or ""))
     except Exception:
         return ""
 
@@ -222,15 +262,28 @@ def ocr_pdf(
             config = ""
             if psm is not None:
                 config = f"--psm {psm}"
-            chunks.append(pytesseract.image_to_string(im, lang=lang, config=config))
+            txt = pytesseract.image_to_string(im, lang=lang, config=config)
+            chunks.append(normalize_quotes(txt))
         return unicodedata.normalize("NFC", "\n".join(filter(None, chunks)))
     except Exception:
         return ""
 
 
 # --------------------------------------------------------------------------------------
-# Cleaning & Normalization
+# Cleaning, Normalization, Tokenization
 # --------------------------------------------------------------------------------------
+
+def normalize_quotes(text: str) -> str:
+    """
+    Normalize smart quotes/dashes to ASCII equivalents.
+    """
+    if not text:
+        return ""
+    out = []
+    for ch in text:
+        out.append(_PUNC_MAP.get(ch, ch))
+    return "".join(out)
+
 
 def strip_accents(text: str) -> str:
     """
@@ -259,31 +312,58 @@ def normalize_whitespace(text: str) -> str:
 
 def clean_text(text: str, lower: bool = False, remove_accents: bool = False) -> str:
     """
-    Basic text normalization pipeline (NFC, optional accents removal, whitespace collapse).
-
-    Parameters
-    ----------
-    text : str
-        Raw text.
-    lower : bool
-        If True, lower-case output.
-    remove_accents : bool
-        If True, strip accents.
-
-    Returns
-    -------
-    str
-        Cleaned text.
+    Basic text normalization pipeline (quotes, NFC, accents, whitespace, optional lower).
     """
     if not text:
         return ""
-    t = unicodedata.normalize("NFC", text)
+    t = normalize_quotes(text)
+    t = unicodedata.normalize("NFC", t)
     if remove_accents:
         t = strip_accents(t)
     t = normalize_whitespace(t)
     if lower:
         t = t.lower()
     return t
+
+
+def simple_tokens(text: str) -> List[str]:
+    """
+    Regex-based alpha tokenizer (Unicode-aware; retains diacritics).
+    """
+    if not text:
+        return []
+    return re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+
+
+def split_sentences(text: str) -> List[str]:
+    """
+    Lightweight sentence splitter (no external NLP).
+    """
+    if not text:
+        return []
+    # First normalize whitespace and quotes to reduce odd splits
+    norm = normalize_whitespace(normalize_quotes(text))
+    parts = _SENT_PAT.split(norm)
+    # Join small fragments that were likely false boundaries
+    out: List[str] = []
+    for s in parts:
+        s = s.strip()
+        if not s:
+            continue
+        out.append(s)
+    return out
+
+
+def split_paragraphs(text: str) -> List[str]:
+    """
+    Split text into paragraphs by blank lines.
+    """
+    if not text:
+        return []
+    # Normalize newlines; split on 2+ newlines
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+    blocks = re.split(r"\n{2,}", t)
+    return [normalize_whitespace(b) for b in blocks if b.strip()]
 
 
 # --------------------------------------------------------------------------------------
@@ -306,30 +386,13 @@ def simple_keywords(
 
     Heuristics:
       • Split to tokens, filter stopwords, score by (frequency * position_weight)
-      • Merge adjacent capitalized tokens as candidate phrases
+      • Merge adjacent non-stopword tokens as candidate phrases
       • Return unique candidates by score
-
-    Parameters
-    ----------
-    text : str
-        Input text.
-    top_k : int
-        Number of keywords/phrases to return.
-    min_len : int
-        Minimum token length (excluding diacritics).
-    stopwords : Optional[Iterable[str]]
-        Custom stopwords; defaults to built-in minimal set.
-
-    Returns
-    -------
-    List[str]
-        Top-k candidate keywords.
     """
     sw = set(stopwords) if stopwords is not None else _STOPWORDS
     if not text:
         return []
 
-    # Phrase candidates: sequences of non-stopwords
     raw = unicodedata.normalize("NFC", text)
     tokens = _tokenize(strip_accents(raw).lower())
     if not tokens:
@@ -344,18 +407,17 @@ def simple_keywords(
         pos_w = 1.0 + 0.5 * (1.0 - (i / max(1, n - 1)))  # 1.5 at start → 1.0 at end
         freq[tok] = freq.get(tok, 0.0) + pos_w
 
-    # capitalize phrases from original text (roughly)
+    # phrase formation from original (preserves capitalization)
     phrases: Dict[str, float] = {}
 
     def _add_phrase(ph: str, score: float):
         ph_norm = normalize_whitespace(ph)
-        if len(ph_norm) >= min_len:
+        if len(strip_accents(ph_norm)) >= min_len:
             phrases[ph_norm] = max(phrases.get(ph_norm, 0.0), score)
 
-    # Greedy phrase formation from original (preserves capitalization)
     words = re.findall(r"\b[\wÀ-ÖØ-öø-ÿ'’-]+\b", raw)
     curr, score_acc = [], 0.0
-    for idx, w in enumerate(words):
+    for w in words:
         w_clean = strip_accents(w).lower()
         if len(w_clean) >= min_len and w_clean not in sw and re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", w):
             curr.append(w)
@@ -367,7 +429,6 @@ def simple_keywords(
     if curr:
         _add_phrase(" ".join(curr), score_acc if score_acc > 0 else len(curr))
 
-    # fallback if phrases empty: use single tokens by freq
     if not phrases:
         ranked = sorted(freq.items(), key=lambda kv: kv[1], reverse=True)
         return [k for k, _ in ranked[:top_k]]
@@ -377,7 +438,7 @@ def simple_keywords(
 
 
 # --------------------------------------------------------------------------------------
-# Coordinate Parsing
+# Coordinates
 # --------------------------------------------------------------------------------------
 
 def _dms_to_decimal(deg: int, minute: int, sec: float, hemi: str) -> float:
@@ -387,12 +448,12 @@ def _dms_to_decimal(deg: int, minute: int, sec: float, hemi: str) -> float:
 
 def parse_coordinates(text: str) -> List[Tuple[float, float]]:
     """
-    Parse decimal and DMS coordinates from text.
+    Parse decimal, strict DMS, and loose DMS coordinates from text.
 
     Returns
     -------
     List[Tuple[float, float]]
-        List of (lat, lon) in decimal degrees, filtered for valid ranges.
+        List of (lat, lon) in decimal degrees, filtered for valid ranges and deduplicated.
     """
     if not text:
         return []
@@ -408,8 +469,22 @@ def parse_coordinates(text: str) -> List[Tuple[float, float]]:
         except Exception:
             continue
 
-    # DMS patterns
+    # Strict DMS patterns
     for m in _DMS_PAT.finditer(text):
+        try:
+            lat = _dms_to_decimal(
+                int(m.group("lat_deg")), int(m.group("lat_min")), float(m.group("lat_sec")), m.group("lat_dir")
+            )
+            lon = _dms_to_decimal(
+                int(m.group("lon_deg")), int(m.group("lon_min")), float(m.group("lon_sec")), m.group("lon_dir")
+            )
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                coords.append((lat, lon))
+        except Exception:
+            continue
+
+    # Loose DMS patterns
+    for m in _LOOSE_DMS_PAT.finditer(text):
         try:
             lat = _dms_to_decimal(
                 int(m.group("lat_deg")), int(m.group("lat_min")), float(m.group("lat_sec")), m.group("lat_dir")
@@ -434,7 +509,7 @@ def parse_coordinates(text: str) -> List[Tuple[float, float]]:
 
 
 # --------------------------------------------------------------------------------------
-# Entity Extraction
+# Entities
 # --------------------------------------------------------------------------------------
 
 def _extract_dates(text: str) -> List[str]:
@@ -458,11 +533,6 @@ def toponym_candidates(text: str, max_k: int = 50) -> List[str]:
       • Title-cased multi-word sequences
       • Filter stopwords
       • Deduplicate & truncate
-
-    Returns
-    -------
-    List[str]
-        Candidate toponyms (as-appearing in text).
     """
     if not text:
         return []
@@ -491,21 +561,6 @@ def extract_entities(
 ) -> TextEntityResult:
     """
     Extract lightweight entities: dates, coordinates, hydro terms, toponyms, keywords.
-
-    Parameters
-    ----------
-    text : str
-        Input text.
-    use_spacy : bool
-        If True and spaCy available, run spaCy NER for extra toponyms.
-    spacy_model : str
-        SpaCy model name (only if `use_spacy` is True).
-    keyword_top_k : int
-        Number of keywords to extract.
-
-    Returns
-    -------
-    TextEntityResult
     """
     t_norm = unicodedata.normalize("NFC", text or "")
     dates = _extract_dates(t_norm)
@@ -533,7 +588,7 @@ def extract_entities(
 
 
 # --------------------------------------------------------------------------------------
-# Gazetteer Matching (exact + fuzzy)
+# Gazetteer Matching (exact + fuzzy) with spans
 # --------------------------------------------------------------------------------------
 
 def match_gazetteer(
@@ -545,21 +600,7 @@ def match_gazetteer(
     """
     Match candidate toponyms in text against a gazetteer list.
 
-    Parameters
-    ----------
-    text : str
-        Input text.
-    gazetteer_names : Sequence[str]
-        Known place names.
-    fuzzy : bool
-        If True, use difflib ratio for fuzzy matches.
-    min_ratio : float
-        Minimum similarity ratio (0..1) for accepting fuzzy matches.
-
-    Returns
-    -------
-    List[Tuple[str, str, float]]
-        Triples of (candidate, matched_gazetteer, score).
+    Returns a list of (candidate_string, matched_gazetteer, score).
     """
     cands = toponym_candidates(text)
     if not gazetteer_names or not cands:
@@ -587,7 +628,6 @@ def match_gazetteer(
 
         for c in cands:
             n = _norm(c)
-            # find best match
             best = difflib.get_close_matches(n, norm_gaz, n=1, cutoff=min_ratio)
             if best:
                 idx = norm_gaz.index(best[0])
@@ -607,18 +647,102 @@ def match_gazetteer(
 
 
 # --------------------------------------------------------------------------------------
+# Context windows & coordinate redaction
+# --------------------------------------------------------------------------------------
+
+def extract_context_windows(
+    text: str,
+    spans: Sequence[Tuple[int, int]],
+    radius: int = 80,
+) -> List[str]:
+    """
+    Extract context windows around character spans (e.g., gazetteer or coordinate matches).
+
+    Parameters
+    ----------
+    text : str
+        Source text.
+    spans : Sequence[Tuple[int, int]]
+        Character (start, end) positions (Python slicing convention).
+    radius : int
+        Number of characters to include on each side.
+
+    Returns
+    -------
+    List[str]
+        Extracted windows (whitespace-normalized).
+    """
+    if not text or not spans:
+        return []
+    windows: List[str] = []
+    n = len(text)
+    for s, e in spans:
+        s2 = max(0, s - radius)
+        e2 = min(n, e + radius)
+        windows.append(normalize_whitespace(text[s2:e2]))
+    return windows
+
+
+def round_coordinates(
+    coords: Sequence[Tuple[float, float]],
+    lat_decimals: int = 2,
+    lon_decimals: int = 2,
+) -> List[Tuple[float, float]]:
+    """
+    Round coordinates to coarse precision (e.g., ~1 km) for ethical releases.
+
+    Note: 0.01° ~ 1.11 km at equator for lat; lon distance varies with latitude.
+    """
+    out: List[Tuple[float, float]] = []
+    for lat, lon in coords:
+        out.append((round(lat, lat_decimals), round(lon, lon_decimals)))
+    return out
+
+
+def redact_coordinates(text: str, replacement: str = "[COORD]") -> str:
+    """
+    Redact (mask) coordinates in text. Useful for public outputs where precise locations
+    should not be disclosed without consent.
+    """
+    if not text:
+        return ""
+    t = _DEC_COORD_PAT.sub(replacement, text)
+    t = _DMS_PAT.sub(replacement, t)
+    t = _LOOSE_DMS_PAT.sub(replacement, t)
+    return t
+
+
+# --------------------------------------------------------------------------------------
 # Module Self-Test (optional)
 # --------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
     # Simple self-checks (safe to run in Kaggle/CI)
     sample = """
-    Report from 1912 notes: "Black soil near the left bank of Rio Negro at approx. 03°07'12"S, 060°01'30"W".
+    Report from 1912 notes: “Black soil near the left bank of Rio Negro at approx. 03°07'12"S, 060°01'30"W”.
     Another reference: -3.12, -60.02 around the same lagoon. Expedition: 05/07/1912.
+    Also noted: 03 07 12 S; 060 30 45 W near the floodplain. See discussion in Manaus.
     """
+
     print("CLEAN:", clean_text(sample)[:120], "...")
-    print("COORDS:", parse_coordinates(sample))
+    print("TOKENS:", simple_tokens(sample)[:10])
+    print("SENTS:", split_sentences(sample))
+
+    coords = parse_coordinates(sample)
+    print("COORDS:", coords)
+    print("COORDS(rounded):", round_coordinates(coords, 2, 2))
+    print("REDACT:", redact_coordinates(sample)[:160], "...")
+
     ent = extract_entities(sample, use_spacy=False)
     print("ENTITIES:", ent)
+
     gaz = ["Rio Negro", "Rio Solimões", "Manaus", "Itacoatiara"]
-    print("GAZ MATCH:", match_gazetteer(sample, gaz))
+    matches = match_gazetteer(sample, gaz)
+    print("GAZ MATCH:", matches)
+
+    # Example context windows around toponym spans (demo by searching)
+    spans = []
+    for m in re.finditer(r"Rio Negro|Manaus", sample):
+        spans.append((m.start(), m.end()))
+    ctx = extract_context_windows(sample, spans, radius=40)
+    print("CONTEXT WINDOWS:", ctx)
