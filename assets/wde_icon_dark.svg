@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="gradDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#111827;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1f2937;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <circle cx="128" cy="128" r="120" fill="url(#gradDark)" />
+  <text x="50%" y="55%" font-size="80" font-weight="700" text-anchor="middle" fill="#20BEFF" font-family="Segoe UI, Helvetica, Arial">
+    WDE
+  </text>
+</svg>
