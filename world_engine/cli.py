@@ -1,39 +1,49 @@
 # FILE: world_engine/cli.py
 # =============================================================================
-# 🌍 World Discovery Engine (WDE) — Typer CLI (Ultimate Upgrade)
+# 🌍 World Discovery Engine (WDE) — Typer CLI (Ultimate Upgrade + Run Logging)
 #
-# What's new (additions in this upgrade)
-# --------------------------------------
-# 1) docs                 View key project docs from CLI (architecture/datasets/ethics/repo)
-# 2) effective-config     Emit the fully-resolved config (after overrides) to JSON/YAML
-# 3) validate-artifacts   Run the artifact validator (scripts/validate_artifacts.py) on outputs/
-# 4) fetch-data           Thin wrapper for scripts/fetch_datasets.sh (bbox/flags passthrough)
-# 5) export-kaggle        Thin wrapper for scripts/export_kaggle.sh (owner/slug/etc.)
-# 6) generate-reports     Thin wrapper for scripts/generate_reports.sh (zip/mask/etc.)
-# 7) profile              Wrapper for scripts/profiling_tools.py (cprofile|memory|timers|pyspy)
-# 8) report-open          Convenience: open the reports index (best-effort cross-platform)
+# What's new in this upgrade
+# --------------------------
+# 1) Logging controls on every command:
+#    --run-id auto|<str>   → stamps file/JSON logs with a stable run id (auto = ts + git short hash)
+#    --log-level LEVEL     → overrides config.logging.level (INFO|DEBUG|...)
+#    --log-file/--no-log-file, --log-json/--no-log-json → force on/off regardless of config
+#
+# 2) Config + provenance helpers:
+#    - effective-config     Emit fully resolved config (after overrides) to JSON or YAML
+#    - code-hash            Tree hash of repo (provenance for manifests)
+#
+# 3) Docs & artifacts quality-of-life:
+#    - docs                 View key project docs from CLI (architecture/datasets/ethics/repo)
+#    - validate-artifacts   Run artifacts validator (scripts/validate_artifacts.py) on outputs/
+#    - report-open          Open reports/index.html (cross-platform best-effort)
+#
+# 4) Script wrappers (thin shims to existing scripts/):
+#    - fetch-data           scripts/fetch_datasets.sh (bbox/flags passthrough)
+#    - export-kaggle        scripts/export_kaggle.sh (owner/slug/etc.)
+#    - generate-reports     scripts/generate_reports.sh (zip/mask/etc.)
+#    - profile              scripts/profiling_tools.py (cprofile|memory|timers|pyspy)
 #
 # Existing features kept and improved:
 #  - full-run, ingest, scan, evaluate, verify, report
 #  - --override JSON patch; --dry-run preview plan
-#  - selftest, env, version, code-hash
+#  - selftest, env, version
 #  - per-site manifest fallback if dump helper absent
 #
 # Usage examples
 # --------------
-#   # Run full pipeline with overrides and resume support
-#   python -m world_engine.cli full-run -c configs/pipeline.yaml -o '{"aoi":{"bbox":[-3.5,-60.5,-3.4,-60.4]}}'
-#   python -m world_engine.cli full-run -c configs/pipeline.yaml --resume-from evaluate
+#   # Full pipeline with explicit run logging (file + JSONL + auto run-id)
+#   python -m world_engine.cli full-run -c configs/pipeline.yaml --run-id auto --log-file --log-json
 #
 #   # Docs & config
 #   python -m world_engine.cli docs --section architecture
-#   python -m world_engine.cli effective-config -c configs/pipeline.yaml -o resolved.json
+#   python -m world_engine.cli effective-config -c configs/pipeline.yaml -o resolved.yaml
 #
 #   # Validation & artifacts
 #   python -m world_engine.cli validate-artifacts --root outputs --strict
 #   python -m world_engine.cli report-open --root outputs
 #
-#   # Scripts wrappers (these assume scripts/* exist and are executable)
+#   # Scripts wrappers (assumes scripts/* exist and are executable)
 #   python -m world_engine.cli fetch-data --aoi-bbox "-60.50,-3.50,-60.40,-3.40" --dem --hydro --s2
 #   python -m world_engine.cli export-kaggle --owner you --name wde-ade --notebook notebooks/ade_discovery_pipeline.ipynb --make-zip
 #   python -m world_engine.cli generate-reports --root outputs --zip --mask
@@ -58,7 +68,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import click  # pager for docs
 import typer
 
-# --- Project utils & stages (must exist in repo) --------------------------------------
+# --- Project utils & stages ---------------------------------------------------
 from .utils.config_loader import load_yaml, resolve_config
 from .utils.logging_utils import get_logger, init_logging
 from .ingest import run_ingest
@@ -72,6 +82,12 @@ try:
     from .report import dump_site_manifest as _dump_site_manifest  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover
     _dump_site_manifest = None  # fallback to CLI-based manifest builder
+
+# Optional import: yaml for effective-config YAML output
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover
+    yaml = None  # we will fallback to JSON if PyYAML is absent
 
 app = typer.Typer(add_completion=False, help="World Discovery Engine (WDE) — Pipeline CLI")
 
@@ -188,6 +204,65 @@ def _record_run_manifest(
     path = out_dir / "run_manifest.json"
     _write_json(path, run_info)
     return path
+
+
+# =============================================================================
+# Run-id & Logging overrides
+# =============================================================================
+
+
+def _git_short_hash() -> Optional[str]:
+    try:
+        out = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL)
+        return out.decode("utf-8").strip()
+    except Exception:
+        return None
+
+
+def _auto_run_id() -> str:
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    g = _git_short_hash()
+    return f"{ts}_{g}" if g else ts
+
+
+def _merge_logging_overrides(cfg: Dict[str, Any],
+                             level: Optional[str],
+                             to_file: Optional[bool],
+                             to_json: Optional[bool]) -> Dict[str, Any]:
+    c = dict(cfg or {})
+    lc = dict(c.get("logging", {}) or {})
+    if level:
+        lc["level"] = level
+    if to_file is not None:
+        lc["to_file"] = bool(to_file)
+    if to_json is not None:
+        lc["to_json"] = bool(to_json)
+    # default logs dir if user didn't set
+    lc.setdefault("dir", "logs")
+    c["logging"] = lc
+    return c
+
+
+def _bootstrap_logging(cfg: Dict[str, Any],
+                       run_id: Optional[str],
+                       level: Optional[str],
+                       to_file: Optional[bool],
+                       to_json: Optional[bool]) -> Tuple[Dict[str, Any], str]:
+    """
+    Apply CLI logging overrides, compute run_id (auto|str), and initialize logging.
+    Returns (merged_cfg, resolved_run_id).
+    """
+    merged = _merge_logging_overrides(cfg, level, to_file, to_json)
+    rid = _auto_run_id() if (run_id == "auto" or not run_id) else run_id
+    # init_logging from utils accepts (cfg, run_id) in upgraded version
+    try:
+        init_logging(merged, run_id=rid)  # upgraded utils.logging_utils supports run_id
+    except TypeError:
+        # fallback to older signature init_logging(cfg)
+        init_logging(merged)  # type: ignore[arg-type]
+    log = get_logger("wde.cli")
+    log.info("[RunMeta] run_id=%s cfg_hash=%s", rid, _sha256_bytes(json.dumps(merged, sort_keys=True).encode("utf-8")))
+    return merged, rid
 
 
 # =============================================================================
@@ -315,7 +390,7 @@ def _ensure_site_manifests(cfg: Dict[str, Any], reports_dir: Path, log) -> Tuple
 def cli_version(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to pipeline config YAML.")
 ):
-    cli_version = os.environ.get("WDE_CLI_VERSION", "1.2.0")
+    cli_version = os.environ.get("WDE_CLI_VERSION", "1.3.0")
     cfg_hash = None
     if config:
         p = Path(config)
@@ -331,11 +406,17 @@ def cli_env():
 
 
 @app.command("selftest")
-def cli_selftest(config: str = typer.Option(..., "--config", "-c", help="Path to pipeline config YAML.")):
+def cli_selftest(
+    config: str = typer.Option(..., "--config", "-c", help="Path to pipeline config YAML."),
+    run_id: str = typer.Option("auto", "--run-id", help='Run identifier ("auto" => timestamp+git).'),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Override logging level (e.g. INFO, DEBUG)."),
+    log_file: Optional[bool] = typer.Option(None, "--log-file/--no-log-file", help="Enable/disable file logging."),
+    log_json: Optional[bool] = typer.Option(None, "--log-json/--no-log-json", help="Enable/disable JSONL logging."),
+):
     cfg = resolve_config(config)
     out_dir = Path(cfg["run"]["output_dir"]).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    init_logging(cfg)
+    cfg, rid = _bootstrap_logging(cfg, run_id, log_level, log_file, log_json)
     log = get_logger("wde.cli")
 
     required_sections = ["run", "pipeline", "ethics", "output"]
@@ -343,6 +424,7 @@ def cli_selftest(config: str = typer.Option(..., "--config", "-c", help="Path to
 
     report = {
         "timestamp_utc": _utc_now_iso(),
+        "run_id": rid,
         "config_path": str(Path(config).resolve().as_posix()),
         "config_hash": _sha256_file(Path(config)),
         "output_dir": str(out_dir.as_posix()),
@@ -385,16 +467,8 @@ def cli_effective_config(
     if out:
         outp = Path(out)
         outp.parent.mkdir(parents=True, exist_ok=True)
-        if outp.suffix.lower() in (".yml", ".yaml"):
-            # dump as YAML if loader available; else JSON
-            try:
-                import yaml  # type: ignore
-
-                outp.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-            except Exception:
-                _write_json(outp.with_suffix(".json"), cfg)
-                typer.echo(f"YAML not available; wrote JSON → {outp.with_suffix('.json')}")
-                return
+        if outp.suffix.lower() in (".yml", ".yaml") and yaml is not None:
+            outp.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")  # type: ignore[arg-type]
         else:
             _write_json(outp, cfg)
         typer.echo(f"Wrote resolved config → {outp.as_posix()}")
@@ -412,15 +486,19 @@ def full_run(
     resume_from: Optional[str] = typer.Option(None, "--resume-from", help="ingest|scan|evaluate|verify|report"),
     skip_manifests: bool = typer.Option(False, "--skip-manifests", help="Skip per-site manifests."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview stages without executing."),
+    run_id: str = typer.Option("auto", "--run-id", help='Run identifier ("auto" => timestamp+git).'),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Override logging level (e.g. INFO, DEBUG)."),
+    log_file: Optional[bool] = typer.Option(None, "--log-file/--no-log-file", help="Enable/disable file logging."),
+    log_json: Optional[bool] = typer.Option(None, "--log-json/--no-log-json", help="Enable/disable JSONL logging."),
 ):
     cfg = resolve_config(config, overrides_json=overrides)
     out_dir = Path(cfg["run"]["output_dir"]).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    init_logging(cfg)
+    cfg, rid = _bootstrap_logging(cfg, run_id, log_level, log_file, log_json)
     log = get_logger("wde.cli")
-    log.info("=== WDE :: FULL RUN ===")
-    artifacts: Dict[str, Any] = {}
+    log.info("=== WDE :: FULL RUN :: run_id=%s ===", rid)
+    artifacts: Dict[str, Any] = {"run_id": rid}
 
     order = ["ingest", "scan", "evaluate", "verify", "report"]
     if resume_from:
@@ -438,7 +516,7 @@ def full_run(
 
     if dry_run:
         plan = [s for s in order if _would_run(s)]
-        typer.echo(json.dumps({"plan": plan, "resume_from": resume_from, "dry_run": True}, indent=2))
+        typer.echo(json.dumps({"plan": plan, "resume_from": resume_from, "dry_run": True, "run_id": rid}, indent=2))
         return
 
     prev = None
@@ -477,18 +555,36 @@ def full_run(
     log.info("Full run completed. Artifacts manifest → %s", run_manifest_path.as_posix())
 
 
+def _stage_entry(
+    stage_name: str,
+    runner,
+    config: str,
+    overrides: Optional[str],
+    dry_run: bool,
+    run_id: str,
+    log_level: Optional[str],
+    log_file: Optional[bool],
+    log_json: Optional[bool],
+):
+    cfg = resolve_config(config, overrides_json=overrides)
+    cfg, rid = _bootstrap_logging(cfg, run_id, log_level, log_file, log_json)
+    if dry_run:
+        typer.echo(json.dumps({"stage": stage_name, "dry_run": True, "run_id": rid}, indent=2))
+        return
+    return runner(cfg)
+
+
 @app.command("ingest")
 def cli_ingest(
     config: str = typer.Option(..., "--config", "-c"),
     overrides: Optional[str] = typer.Option(None, "--override", "-o"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without executing."),
+    run_id: str = typer.Option("auto", "--run-id", help='Run identifier ("auto" => timestamp+git).'),
+    log_level: Optional[str] = typer.Option(None, "--log-level"),
+    log_file: Optional[bool] = typer.Option(None, "--log-file/--no-log-file"),
+    log_json: Optional[bool] = typer.Option(None, "--log-json/--no-log-json"),
 ):
-    cfg = resolve_config(config, overrides_json=overrides)
-    init_logging(cfg)
-    if dry_run:
-        typer.echo(json.dumps({"stage": "ingest", "dry_run": True}, indent=2))
-        return
-    run_ingest(cfg)
+    _stage_entry("ingest", run_ingest, config, overrides, dry_run, run_id, log_level, log_file, log_json)
 
 
 @app.command("scan")
@@ -496,13 +592,12 @@ def cli_scan(
     config: str = typer.Option(..., "--config", "-c"),
     overrides: Optional[str] = typer.Option(None, "--override", "-o"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without executing."),
+    run_id: str = typer.Option("auto", "--run-id"),
+    log_level: Optional[str] = typer.Option(None, "--log-level"),
+    log_file: Optional[bool] = typer.Option(None, "--log-file/--no-log-file"),
+    log_json: Optional[bool] = typer.Option(None, "--log-json/--no-log-json"),
 ):
-    cfg = resolve_config(config, overrides_json=overrides)
-    init_logging(cfg)
-    if dry_run:
-        typer.echo(json.dumps({"stage": "scan", "dry_run": True}, indent=2))
-        return
-    run_detect(cfg)
+    _stage_entry("scan", run_detect, config, overrides, dry_run, run_id, log_level, log_file, log_json)
 
 
 @app.command("evaluate")
@@ -510,13 +605,12 @@ def cli_evaluate(
     config: str = typer.Option(..., "--config", "-c"),
     overrides: Optional[str] = typer.Option(None, "--override", "-o"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without executing."),
+    run_id: str = typer.Option("auto", "--run-id"),
+    log_level: Optional[str] = typer.Option(None, "--log-level"),
+    log_file: Optional[bool] = typer.Option(None, "--log-file/--no-log-file"),
+    log_json: Optional[bool] = typer.Option(None, "--log-json/--no-log-json"),
 ):
-    cfg = resolve_config(config, overrides_json=overrides)
-    init_logging(cfg)
-    if dry_run:
-        typer.echo(json.dumps({"stage": "evaluate", "dry_run": True}, indent=2))
-        return
-    run_evaluate(cfg)
+    _stage_entry("evaluate", run_evaluate, config, overrides, dry_run, run_id, log_level, log_file, log_json)
 
 
 @app.command("verify")
@@ -524,26 +618,29 @@ def cli_verify(
     config: str = typer.Option(..., "--config", "-c"),
     overrides: Optional[str] = typer.Option(None, "--override", "-o"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without executing."),
+    run_id: str = typer.Option("auto", "--run-id"),
+    log_level: Optional[str] = typer.Option(None, "--log-level"),
+    log_file: Optional[bool] = typer.Option(None, "--log-file/--no-log-file"),
+    log_json: Optional[bool] = typer.Option(None, "--log-json/--no-log-json"),
 ):
-    cfg = resolve_config(config, overrides_json=overrides)
-    init_logging(cfg)
-    if dry_run:
-        typer.echo(json.dumps({"stage": "verify", "dry_run": True}, indent=2))
-        return
-    run_verify(cfg)
+    _stage_entry("verify", run_verify, config, overrides, dry_run, run_id, log_level, log_file, log_json)
 
 
 @app.command("report")
 def cli_report(
     config: str = typer.Option(..., "--config", "-c"),
     overrides: Optional[str] = typer.Option(None, "--override", "-o"),
-    skip_manifests: bool = typer.Option(False, "--skip-manifests", help="Skip writing per-site manifest.json files."),
+    skip_manifests: bool = typer.Option(False, "--skip-manifests", help="Skip per-site manifest.json files."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without executing."),
+    run_id: str = typer.Option("auto", "--run-id"),
+    log_level: Optional[str] = typer.Option(None, "--log-level"),
+    log_file: Optional[bool] = typer.Option(None, "--log-file/--no-log-file"),
+    log_json: Optional[bool] = typer.Option(None, "--log-json/--no-log-json"),
 ):
     cfg = resolve_config(config, overrides_json=overrides)
-    init_logging(cfg)
+    cfg, rid = _bootstrap_logging(cfg, run_id, log_level, log_file, log_json)
     if dry_run:
-        typer.echo(json.dumps({"stage": "report", "dry_run": True}, indent=2))
+        typer.echo(json.dumps({"stage": "report", "dry_run": True, "run_id": rid}, indent=2))
         return
     summary = run_report(cfg)
     log = get_logger("wde.cli")
@@ -680,7 +777,7 @@ def cli_fetch_data(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print intended actions only"),
 ):
     """
-    Wrapper for scripts/fetch_datasets.sh (see that script for details/requirements).
+    Wrapper for scripts/fetch_datasets.sh
     """
     script = Path("scripts/fetch_datasets.sh")
     _ensure_executable(script)
