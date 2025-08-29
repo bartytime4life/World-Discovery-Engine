@@ -1,159 +1,213 @@
-# 🌍 World Discovery Engine (WDE)
+🌍 World Discovery Engine (WDE)
 
-**OpenAI → Z Challenge · Archaeology & Earth Systems**
+OpenAI → Z Challenge · Archaeology & Earth Systems
 
----
+⸻
 
-## 📌 Overview
+📌 Overview
 
-The **World Discovery Engine (WDE)** is a **multi-modal AI pipeline** designed to surface archaeologically significant sites in the Amazon and beyond.
-It fuses **satellite imagery, radar, LiDAR, soil & vegetation maps, hydrology, historical archives, and core sampling data** to generate **candidate site dossiers**.
+The World Discovery Engine (WDE) is a multi-modal AI pipeline for discovering archaeologically significant landscapes across the Amazon and beyond.
 
-Each dossier includes:
+It fuses satellite imagery, radar, LiDAR, soils & vegetation maps, hydrology layers, historical archives, and core sampling data into a reproducible system that outputs candidate site dossiers — combining quantitative evidence with interpretive narrative.
 
-* 📡 **Multi-sensor overlays** (Sentinel, Landsat, SAR, LiDAR)
-* 🌱 **Soil & vegetation fingerprints** (ADE indicators)
-* 📜 **Historical & archival references** (maps, diaries, site DBs)
-* 🔗 **Causal plausibility graphs** (PAG .gml from FCI inference)
-* 🎲 **Uncertainty quantification** (Bayesian GNN + ensembles)
-* 🧪 **Simulation & counterfactuals** (SSIM robustness tests)
+Each dossier integrates:
+	•	📡 Multi-sensor overlays (Sentinel, Landsat, SAR, LiDAR)
+	•	🌱 Soil & vegetation fingerprints (ADE / terra preta indicators)
+	•	📜 Historical concordance (archival maps, expedition diaries, site DBs)
+	•	🔗 Causal plausibility graphs (Partial Ancestral Graphs from FCI inference)
+	•	🎲 Uncertainty quantification (Bayesian GNN ensembles + calibrated scores)
+	•	🧪 Simulation & counterfactuals (SSIM falsification tests)
 
-The pipeline runs **fully on Kaggle** (GPU optional, CPU fallback) using only **open datasets (CC-0 or equivalent)**.
+WDE is designed to run entirely on Kaggle infrastructure (GPU optional, CPU fallback) with open / CC-0 datasets only, ensuring transparent reproducibility.
 
----
+⸻
 
-## 🏆 Challenge Context
+🏆 Challenge Context
 
-This project is built for the **OpenAI → Z Challenge**.
-Key requirements:
+Built for the OpenAI → Z Challenge, WDE satisfies all rubric pillars:
+	•	✅ Open/CC-0 data only, with ≥2 independent modalities per finding
+	•	✅ Archaeological impact focus — ADEs, geoglyphs, settlement networks, ancient hydrological engineering
+	•	✅ Single Kaggle Notebook deliverable (notebooks/ade_discovery_pipeline.ipynb)
+	•	✅ Reproducible outputs with deterministic configs & audit logs
 
-* ✅ **CC-0 licensed data** (≥2 independent sources per finding)
-* ✅ **Archaeological impact focus** (ADEs, geoglyphs, settlement structures)
-* ✅ **Single Kaggle Notebook deliverable** (`notebooks/ade_discovery_pipeline.ipynb`)
-* ✅ **Reproducible outputs** with clear provenance and audit trail
+🧭 Key metric: The rubric prioritizes plausibility & significance of discoveries, not raw anomaly counts.
 
-The Kaggle rubric prioritizes **quality of discoveries** (archaeological plausibility) over raw anomaly count.
+⸻
 
----
+🔬 Pipeline Stages — The Discovery Funnel
 
-## 🔬 Pipeline Stages
+flowchart LR
+  classDef stage fill:#0ea5e9,stroke:#0369a1,color:#fff,rx:14,ry:14;
+  A[Tiling & Ingestion]:::stage --> B[Coarse Scan]:::stage --> C[Mid-Scale Evaluation]:::stage --> D[Verification & Fusion]:::stage --> E[Report & Dossiers]:::stage
 
-The **Discovery Funnel** narrows from broad scan to detailed validation:
+1. Tiling & Ingestion
+	•	AOI grid (0.05° ≈ 5 km tiles)
+	•	Load Sentinel-2, Sentinel-1, DEMs, LiDAR (if available)
+	•	Ingest user overlays (maps, registries, field docs)
 
-1. **Tiling & Ingestion**
+2. Coarse Scan
+	•	CV primitives (edges, Hough, morphology)
+	•	Texture features (LBP, GLCM)
+	•	DEM hillshades & Local Relief Models
+	•	Vision–Language tags (e.g., “rectangular clearing”)
 
-   * AOI grid (0.05° tiles \~ 5 km)
-   * Load Sentinel-2, Sentinel-1, DEM, optional LiDAR
-   * Ingest user overlays (docs, maps, images)
+3. Mid-Scale Evaluation
+	•	NDVI/EVI seasonal time-series
+	•	LiDAR canopy removal
+	•	Hydro-geomorphology plausibility checks
+	•	Archival concordance (OCR’d maps, diaries)
 
-2. **Coarse Scan**
+4. Verification & Fusion
+	•	Multi-proof rule: ≥2 modalities required
+	•	ADE fingerprints (floristic spikes, fractal landforms)
+	•	PAG causal graphs for plausibility
+	•	Bayesian GNN with calibrated uncertainty
+	•	SSIM counterfactuals for robustness
 
-   * CV filters (edges, Hough, morphology)
-   * Texture features (LBP, GLCM)
-   * DEM hillshades & Local Relief Model
-   * Vision-Language captions (e.g. “rectangular clearing”)
+5. Report Generation
+	•	Maps & overlays
+	•	ADE indicator checklist
+	•	Uncertainty plots
+	•	Narrative confidence statement
 
-3. **Mid-Scale Evaluation**
+⸻
 
-   * Seasonal NDVI/EVI time-series
-   * LiDAR canopy removal (if available)
-   * Hydro-geomorphology plausibility (terraces, bluffs, floodplains)
-   * Historical concordance (OCR’d diaries, georeferenced maps)
+🏗️ Architecture Diagram
 
-4. **Verification & Fusion**
+flowchart TB
+  %% 🌍 World Discovery Engine
+  classDef stage fill:#0ea5e9,stroke:#0369a1,color:#ffffff,rx:14,ry:14;
+  classDef store fill:#f59e0b,stroke:#92400e,color:#111827,rx:10,ry:10;
+  classDef side  fill:#10b981,stroke:#065f46,color:#ffffff,rx:12,ry:12;
+  classDef guard fill:#ef4444,stroke:#7f1d1d,color:#ffffff,rx:12,ry:12;
+  classDef io    fill:#e5e7eb,stroke:#374151,color:#111827,rx:10,ry:10;
 
-   * **Multi-proof rule**: ≥2 modalities required
-   * ADE fingerprints (dry-season NDVI spikes, floristic indicators, micro-topography, fractal analysis)
-   * Causal plausibility (PAG `.gml` graphs)
-   * Bayesian GNN for calibrated uncertainty
-   * SSIM counterfactuals (robustness checks)
+  U[Researcher / Collaborator]:::io
+  K[Kaggle Notebook<br/>GPU or CPU]:::io
+  GH[GitHub Actions CI/CD]:::io
 
-5. **Candidate Dossier Generation**
+  subgraph S[Open / CC-0 Data Sources]
+    direction TB
+    S2[Sentinel-2 Optical]:::store
+    S1[Sentinel-1 SAR]:::store
+    DEM[DEMs (SRTM / Copernicus)]:::store
+    LIDAR[LiDAR / GEDI / OpenTopography]:::store
+    SOIL[Soils & Vegetation<br/>(ADE indicators)]:::store
+    HYDRO[Hydrography (HydroSHEDS)]:::store
+    HIST[Archives: maps, diaries,<br/>registries (OCR)]:::store
+    CORE[Core sampling DBs]:::store
+  end
 
-   * Site maps, overlays, causal graph, uncertainty plots
-   * ADE indicator checklist
-   * Refutation tests summary
-   * Narrative confidence statement
+  U -->|Define AOI & configs| K
+  S --> IN
 
----
+  subgraph P[World Discovery Engine Pipeline]
+    direction TB
+    IN[Tiling & Ingestion]:::stage
+    SC[Coarse Scan]:::stage
+    EV[Mid-Scale Evaluation]:::stage
+    VF[Verification & Fusion]:::stage
+    RP[Report Generator]:::stage
+    IN --> SC --> EV --> VF --> RP
+  end
 
-## 📂 Repository Structure
+  subgraph G[Governance & Reproducibility]
+    direction TB
+    ETH[Ethics & Sovereignty]:::guard
+    DVC[DVC & Manifests]:::side
+    CONF[Determinism & Seeds]:::side
+  end
 
-See [`docs/repository_structure.md`](docs/repository_structure.md) for full details.
+  ETH --- P
+  DVC --- P
+  CONF --- P
+
+  OUT1[candidates.json / geojson]:::io
+  OUT2[/reports/*  dossiers]:::io
+  OUT3[/pag/*  PAG graphs]:::io
+  OUT4[/uncertainty/* JSON+plots]:::io
+  OUT5[/ssim/*  counterfactuals]:::io
+  OUT6[/ndvi_timeseries/*]:::io
+  RP --> OUT1 & OUT2 & OUT3 & OUT4 & OUT5 & OUT6
+
+  GH -->|lint • test • validate| K
+  K -->|Run All| P
+
+
+⸻
+
+📂 Repository Structure
+
+See docs/repository_structure.md for the complete layout.
 
 Key directories:
+	•	world_engine/ — Core pipeline (ingest → detect → evaluate → verify → report)
+	•	configs/ — YAML configs (datasets, AOIs, models)
+	•	notebooks/ — Kaggle-ready notebook(s)
+	•	data/ — Optional local staging (DVC-managed)
+	•	docs/ — Architecture, datasets, ethics, contributing
+	•	tests/ — Unit & integration tests with mini-AOI reproducibility
 
-* `world_engine/` — Core pipeline (ingest → detect → evaluate → verify → report)
-* `configs/` — YAML configs for AOIs, datasets, models
-* `notebooks/` — Kaggle-ready `ade_discovery_pipeline.ipynb`
-* `data/` — (Optional) local mount for raw/interim/output (DVC-managed)
-* `docs/` — Architecture, datasets, ethics, contributing guides
-* `tests/` — Unit + integration tests (small AOI, reproducibility checks)
+⸻
 
----
+⚖️ Ethics & Governance
 
-## ⚖️ Ethics & Governance
+WDE is aligned with the CARE Principles:
+	•	🪶 Respect Indigenous sovereignty — sites in Indigenous lands flagged; coordinates masked without consent
+	•	📜 Regional compliance — e.g., Brazil IPHAN protections
+	•	🌐 Anti-data colonialism — results support collaborative archaeology, not unilateral extraction
 
-WDE is built with **CARE Principles** (Collective Benefit, Authority to Control, Responsibility, Ethics):
+See docs/ETHICS.md.
 
-* **Respect Indigenous sovereignty**: detections in Indigenous lands are flagged; precise coordinates masked without consent.
-* **Legal compliance**: supports region-specific restrictions (e.g. Brazil IPHAN).
-* **Anti-data-colonialism**: outputs are intended for **collaborative archaeology**, not unilateral claims.
+⸻
 
-See [`docs/ETHICS.md`](docs/ETHICS.md) for details.
+⚙️ Reproducibility & CI/CD
+	•	Deterministic runs — fixed seeds, logged configs
+	•	Docker parity — Kaggle ↔ local reproducibility
+	•	GitHub Actions — lint, unit tests, notebook CI, artifact validation
+	•	CausalOps lifecycle: Arrange → Create → Validate → Test → Publish → Operate → Monitor → Document
 
----
+⸻
 
-## ⚙️ Reproducibility
+🚀 Getting Started
 
-* **Deterministic runs** (fixed seeds, logged configs)
-* **Dockerfile** for runtime parity with Kaggle
-* **CI/CD via GitHub Actions**: lint, test, notebook CI, artifact validation
-* **CausalOps lifecycle**: Arrange → Create → Validate → Test → Publish → Operate → Monitor → Document
+Clone locally:
 
----
-
-## 🚀 Getting Started
-
-Clone and install:
-
-```bash
 git clone https://github.com/<your-org>/world-discovery-engine.git
 cd world-discovery-engine
 pip install -r requirements.txt
-```
 
 Run on Kaggle:
+	1.	Upload repo (or sync via GitHub → Kaggle integration)
+	2.	Open notebooks/ade_discovery_pipeline.ipynb
+	3.	Select “Run All”
+	4.	Outputs appear under /outputs/:
+	•	candidates.json / candidates.geojson
+	•	/reports/ → site dossiers (PDF/HTML)
+	•	/pag/ → causal graphs
+	•	/uncertainty/ → calibration plots + JSON
+	•	/ssim/ → robustness checks
+	•	/ndvi_timeseries/ → vegetation fingerprints
 
-1. Upload repo (or link via GitHub → Kaggle integration)
-2. Open `notebooks/ade_discovery_pipeline.ipynb`
-3. “Run All” (uses open datasets + fallbacks)
-4. Outputs available under `/outputs/`:
+⸻
 
-   * `candidates.json` + `candidates.geojson`
-   * `/reports/` (site dossiers, PDF/HTML)
-   * `/pag/` (causal graphs)
-   * `/uncertainty/` (histograms, JSON)
-   * `/ssim/` (robustness tests)
-   * `/ndvi_timeseries/` (seasonal ADE checks)
+📑 Documentation
 
----
+The docs/ folder contains:
+	•	Architecture — docs/architecture.md
+	•	Datasets — docs/datasets.md
+	•	Repository structure — docs/repository_structure.md
+	•	Ethics — docs/ETHICS.md
+	•	Contributing — docs/contributing.md
 
-## 📑 Documentation
+⸻
 
-See the [`docs/`](docs/) folder for:
+🛡️ License
+	•	Code: MIT License
+	•	Data: All inputs are open-access / CC-0 compliant
 
-* **Architecture** — [`docs/architecture.md`](docs/architecture.md)
-* **Datasets registry** — [`docs/datasets.md`](docs/datasets.md)
-* **Repository structure** — [`docs/repository_structure.md`](docs/repository_structure.md)
-* **Ethics** — [`docs/ETHICS.md`](docs/ETHICS.md)
-* **Contributing** — [`docs/contributing.md`](docs/contributing.md)
+⸻
 
----
+✨ WDE transforms open geospatial chaos into archaeological insight — reproducible, ethical, and scientifically defensible.
 
-## 🛡️ License
-
-* **Code**: MIT License
-* **Data**: All inputs are **open / CC-0** compliant
-
----
+⸻
