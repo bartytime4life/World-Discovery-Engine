@@ -1,8 +1,3 @@
-Here is the rebuilt and updated docs/architecture.md for the World Discovery Engine (WDE).
-It integrates your project files, uploaded references, and the HIA–Geodetic Codex design patterns, with citations to the correct documents.
-
-⸻
-
 🌍 World Discovery Engine (WDE) — Architecture
 
 0. Purpose & Scope
