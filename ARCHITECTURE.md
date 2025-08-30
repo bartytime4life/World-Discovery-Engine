@@ -157,7 +157,3 @@ WDE is built with ethical archaeology as a first-class principle ￼:
 	•	Ethics: CARE-aligned, sovereignty-respecting.
 
 ⸻
-
-✅ This Architecture.md is now fully integrated: Kaggle-first, reproducible, scientifically rigorous, ethically aware, and aligned with both the OpenAI → Z Challenge rubric and archaeological best practices.
-
-⸻
